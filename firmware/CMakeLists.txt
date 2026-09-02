@@ -32,6 +32,9 @@ add_executable(remapper
     src/main.cc
     src/remapper.cc
     src/remapper_single.cc
+    src/dual_tps43_coordinator.cc
+    src/dual_tps43_fsm.cc
+    src/pad_state.cc
     src/crc.cc
     src/descriptor_parser.cc
     src/tinyusb_stuff.cc
