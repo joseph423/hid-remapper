@@ -13,6 +13,17 @@
 
 namespace {
 
+DualTps43Tuning phase5_behavior_tuning() {
+    DualTps43Tuning tuning;
+    tuning.tap_max_duration_us = 2000;
+    tuning.stationary_intent_threshold_us = 200;
+    tuning.neutral_activation_threshold = 5;
+    tuning.cursor_gain = { 512, 512, 1, 256, 100 };
+    tuning.scroll_gain = { 768, 768, 1, 256, 100 };
+    tuning.scroll_momentum = { 256, 0, 0, 0 };
+    return tuning;
+}
+
 Tps43Sample inactive() {
     return {};
 }
@@ -75,8 +86,11 @@ void require_no_action(const LogicalActions& actions) {
     require(actions.right_button == ButtonAction::None, "unexpected right-button action");
 }
 
+// Drives the public FSM boundary with normalized samples and controlled time.
 class Harness {
    public:
+    // Advances logical time, normalizes both samples, and returns one cycle's
+    // logical actions.
     LogicalActions step(Tps43Sample left, Tps43Sample right, uint64_t advance_us = 100) {
         now_us_ += advance_us;
         left.timestamp_us = now_us_;
@@ -93,7 +107,7 @@ class Harness {
     uint64_t now_us_ = 0;
     PadStateTracker left_tracker_;
     PadStateTracker right_tracker_;
-    DualTps43Fsm fsm_ = DualTps43Fsm({ 2000, 200, 5, 2, 3 });
+    DualTps43Fsm fsm_ = DualTps43Fsm(phase5_behavior_tuning());
 };
 
 void enter_left_scroll(Harness& harness) {
