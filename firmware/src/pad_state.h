@@ -6,6 +6,11 @@
 #include "tps43_driver.h"
 
 struct PadState {
+    // False means retained touch state with no new displacement or events.
+    bool fresh_sample = false;
+    // Time between acquisitions, not coordinator cycles. Zero selects the
+    // motion channel fallback for a first or non-advancing acquisition.
+    uint64_t sample_interval_us = 0;
     bool active = false;
     uint8_t finger_count = 0;
     int32_t relative_x = 0;
@@ -35,11 +40,15 @@ struct PadState {
 
 class PadStateTracker {
    public:
-    PadState update(const Tps43Sample& sample);
+    // Normalizes one acquisition when fresh is true; otherwise returns retained
+    // touch state with per-acquisition events cleared, ignoring sample.
+    PadState update(const Tps43Sample& sample, bool fresh = true);
+    // Returns the latest normalized logical-cycle state without changing it.
     const PadState& state() const;
 
    private:
     PadState state_;
+    bool have_sample_ = false;
 };
 
 #endif

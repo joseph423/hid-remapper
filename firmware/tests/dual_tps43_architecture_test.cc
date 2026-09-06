@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cstdint>
+#include <stdexcept>
 
 #include "dual_tps43_coordinator.h"
 
@@ -32,11 +33,17 @@ class MockTps43Driver : public Tps43Driver {
    public:
     void set_next_sample(Tps43Sample sample) {
         next_sample_ = sample;
+        pending_ = true;
     }
 
-    void service(uint64_t now_us) override {
+    bool service(uint64_t now_us) override {
         service_time_us = now_us;
+        if (!pending_) {
+            return false;
+        }
         current_sample_ = next_sample_;
+        pending_ = false;
+        return true;
     }
 
     Tps43Sample sample() const override {
@@ -46,6 +53,7 @@ class MockTps43Driver : public Tps43Driver {
     uint64_t service_time_us = 0;
 
    private:
+    bool pending_ = false;
     Tps43Sample next_sample_;
     Tps43Sample current_sample_;
 };
@@ -77,7 +85,167 @@ class RecordingActionSink : public Tps43ActionSink {
     int call_count = 0;
 };
 
+namespace {
+
+void require(bool condition, const char* message) {
+    if (!condition) {
+        throw std::runtime_error(message);
+    }
+}
+
+void verify_acquisition_edges() {
+    MockTps43Driver left, right;
+    RecordingProcessor processor;
+    RecordingActionSink sink;
+    DualTps43Coordinator coordinator(left, right, processor, sink);
+    coordinator.service(1);
+    require(!processor.last_snapshot.right.fresh_sample && !processor.last_snapshot.right.active,
+        "no acquisition must leave initial state inactive");
+
+    right.set_next_sample(compact_sample(true, 1, 0, 3, 100));
+    coordinator.service(100);
+    require(sink.last_actions.cursor_y == 3, "fresh displacement missing");
+    coordinator.service(200);
+    const PadState retained = processor.last_snapshot.right;
+    require(sink.last_actions.cursor_y == 0 && !retained.fresh_sample && retained.active &&
+                retained.session_id == 1 && retained.timestamp_us == 100 && !retained.touch_started,
+        "a retained acquisition must preserve touch state without replaying input");
+
+    // Equal timestamps and payloads do not identify duplicate acquisitions.
+    right.set_next_sample(compact_sample(true, 1, 0, 3, 100));
+    left.set_next_sample(compact_sample(true, 1, 2, 0, 250));
+    coordinator.service(250);
+    require(sink.last_actions.cursor_y == 3 && processor.last_snapshot.right.fresh_sample &&
+                processor.last_snapshot.right.sample_interval_us == 0 && processor.last_snapshot.left.touch_started,
+        "distinct acquisitions must survive equal timestamps and payloads");
+    left.set_next_sample(compact_sample(true, 1, 1, 0, 300));
+    coordinator.service(300);
+    require(processor.last_snapshot.left.relative_x == 1 && !processor.last_snapshot.right.fresh_sample &&
+                sink.last_actions.cursor_y == 0,
+        "pads must advance independently");
+
+    Tps43Sample release;
+    release.timestamp_us = 400;
+    release.single_tap = release.two_finger_tap = release.scroll_gesture = true;
+    right.set_next_sample(release);
+    coordinator.service(400);
+    require(processor.last_snapshot.right.touch_ended && processor.last_snapshot.right.single_tap &&
+                processor.last_snapshot.right.two_finger_tap && processor.last_snapshot.right.scroll_gesture,
+        "fresh gesture and release events missing");
+    coordinator.service(500);
+    const PadState& ended = processor.last_snapshot.right;
+    require(!ended.touch_ended && !ended.single_tap && !ended.two_finger_tap && !ended.scroll_gesture && !ended.active,
+        "release and gesture events must not replay");
+    require(processor.call_count == 7 && sink.call_count == 7,
+        "logical processing must continue on cycles without acquisitions");
+
+    right.set_next_sample(three_finger_sample(0, 0, false, 600));
+    coordinator.service(600);
+    coordinator.service(650);
+    right.set_next_sample(three_finger_sample(3, 5, true, 700));
+    coordinator.service(700);
+    require(processor.last_snapshot.right.three_finger_delta_valid &&
+                processor.last_snapshot.right.three_finger_delta_y == 5 &&
+                processor.last_snapshot.right.sample_interval_us == 100,
+        "acquisition gaps must preserve the centroid baseline and acquisition interval");
+    coordinator.service(750);
+    require(!processor.last_snapshot.right.three_finger_delta_valid &&
+                processor.last_snapshot.right.three_finger_delta_y == 0 &&
+                processor.last_snapshot.right.three_finger_centroid_valid,
+        "centroid displacement must not replay");
+    right.set_next_sample(three_finger_sample(6, 10, true, 800));
+    coordinator.service(800);
+    require(processor.last_snapshot.right.three_finger_delta_y == 5,
+        "centroid movement after a gap must use the last acquisition baseline");
+}
+
+DualTps43Tuning acquisition_tuning() {
+    return { 200000, 200, 5, { 256, 1024, 1000, 128, 10000 },
+        { 256, 768, 1000, 256, 10000 }, { 256, 256, 192, 100 } };
+}
+
+// Exercises the production coordinator and FSM with independently published
+// acquisitions. tick() returns logical actions, including acquisition-free coast.
+class AcquisitionHarness {
+   public:
+    MockTps43Driver left, right;
+
+    LogicalActions tick(uint64_t now_us) {
+        coordinator_.service(now_us);
+        return sink_.last_actions;
+    }
+
+   private:
+    DualTps43Fsm fsm_{ acquisition_tuning() };
+    RecordingActionSink sink_;
+    DualTps43Coordinator coordinator_{ left, right, fsm_, sink_ };
+};
+
+void verify_motion_acquisition_timing() {
+    AcquisitionHarness sparse, extra_ticks;
+    for (AcquisitionHarness* harness : { &sparse, &extra_ticks }) {
+        harness->right.set_next_sample(compact_sample(true, 1, 0, 0, 10000));
+        harness->tick(10000);
+        harness->right.set_next_sample(compact_sample(true, 1, 10, 0, 20000));
+        require(harness->tick(20000).cursor_x == 25, "first filtered velocity gain must match acquisition timing");
+    }
+    for (uint64_t time : { 21000, 25000, 29000 }) {
+        require(extra_ticks.tick(time).cursor_x == 0, "missing acquisitions must not emit cursor movement");
+    }
+    sparse.right.set_next_sample(compact_sample(true, 1, 10, 0, 30000));
+    extra_ticks.right.set_next_sample(compact_sample(true, 1, 10, 0, 30000));
+    const int32_t expected = sparse.tick(30000).cursor_x;
+    require(expected > 25 && extra_ticks.tick(35000).cursor_x == expected,
+        "extra ticks and delayed delivery must not reset filtering or shorten the acquisition interval");
+    extra_ticks.right.set_next_sample(compact_sample(true, 1, 0, 0, 40000));
+    require(extra_ticks.tick(40000).cursor_x == 0, "a fresh stationary acquisition must stop cursor output");
+    extra_ticks.right.set_next_sample(compact_sample(true, 1, 10, 0, 50000));
+    require(extra_ticks.tick(50000).cursor_x == 25, "fresh stationary input must reset cursor history");
+}
+
+void verify_scroll_gaps_and_stationary_intent() {
+    for (bool left_scroll : { false, true }) {
+        for (bool stationary : { false, true }) {
+            AcquisitionHarness harness;
+            MockTps43Driver& driver = left_scroll ? harness.left : harness.right;
+            auto sample = compact_sample(true, left_scroll ? 1 : 2, 0, 0, 10000);
+            driver.set_next_sample(sample);
+            harness.tick(10000);
+            sample.relative_y = 20;
+            sample.movement_reported = sample.scroll_gesture = true;
+            sample.timestamp_us = 20000;
+            driver.set_next_sample(sample);
+            require(harness.tick(20000).scroll_y == 60, "setup scroll gain missing");
+            require(harness.tick(25000).scroll_y == 0, "scroll acquisition must not replay");
+            if (stationary) {
+                sample.relative_y = 0;
+                sample.movement_reported = sample.scroll_gesture = false;
+                sample.timestamp_us = 30000;
+                driver.set_next_sample(sample);
+            }
+            require(harness.tick(30000).scroll_y == 0, "stationary or missing acquisition must emit no active scroll");
+            driver.set_next_sample(compact_sample(false, 0, 0, 0, 40000));
+            require(harness.tick(40000).scroll_y == 0, "release must not replay scroll");
+            require(harness.tick(50000).scroll_y == (stationary ? 0 : 45),
+                "only a fresh stationary sample may clear release velocity; momentum must run without acquisitions");
+        }
+    }
+
+    AcquisitionHarness intent;
+    intent.right.set_next_sample(compact_sample(true, 1, 1, 0, 100));
+    intent.tick(100);
+    intent.left.set_next_sample(compact_sample(true, 1, 0, 0, 200));
+    intent.tick(200);
+    require(intent.tick(400).left_button == ButtonAction::Press,
+        "stationary intent must advance on logical cycles without acquisitions");
+}
+
+}  // namespace
+
 int main() {
+    verify_acquisition_edges();
+    verify_motion_acquisition_timing();
+    verify_scroll_gaps_and_stationary_intent();
     MockTps43Driver left_driver;
     MockTps43Driver right_driver;
     RecordingProcessor processor;

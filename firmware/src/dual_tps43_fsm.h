@@ -116,7 +116,6 @@ class DualTps43Fsm : public DualPadProcessor {
     };
 
     struct VelocityGainState {
-        uint64_t last_timestamp_us = 0;
         uint64_t filtered_speed_pad_units_per_second = 0;
         int64_t residual_x_q8 = 0;
         int64_t residual_y_q8 = 0;
@@ -172,8 +171,8 @@ class DualTps43Fsm : public DualPadProcessor {
 
     // Velocity-gain and scroll-momentum helpers.
     void apply_motion(const DualPadSnapshot& snapshot, LogicalActions& actions);
-    ScaledDelta scale_active_delta(int32_t x, int32_t y, uint64_t now_us, const VelocityGainTuning& tuning, VelocityGainState& state) const;
-    void stop_cursor_motion(uint64_t now_us);
+    ScaledDelta scale_active_delta(int32_t x, int32_t y, uint64_t acquisition_interval_us, const VelocityGainTuning& tuning, VelocityGainState& state) const;
+    void stop_cursor_motion();
     void update_scroll_release_velocity(const ScaledDelta& delta);
     void start_scroll_momentum(uint64_t now_us);
     void apply_scroll_momentum(uint64_t now_us, LogicalActions& actions);

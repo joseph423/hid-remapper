@@ -1,7 +1,25 @@
 #include "pad_state.h"
 
-PadState PadStateTracker::update(const Tps43Sample& sample) {
+PadState PadStateTracker::update(const Tps43Sample& sample, bool fresh) {
+    if (!fresh) {
+        // Keep the centroid baseline and session across acquisition gaps, but
+        // never replay compact movement, centroid deltas, or gesture edges.
+        state_.fresh_sample = false;
+        state_.relative_x = state_.relative_y = 0;
+        state_.movement_reported = false;
+        state_.single_tap = state_.two_finger_tap = state_.scroll_gesture = false;
+        state_.touch_started = state_.touch_ended = false;
+        state_.three_finger_delta_valid = false;
+        state_.three_finger_delta_x = state_.three_finger_delta_y = 0;
+        return state_;
+    }
+
     PadState next;
+    next.fresh_sample = true;
+    if (have_sample_ && sample.timestamp_us > state_.timestamp_us) {
+        next.sample_interval_us = sample.timestamp_us - state_.timestamp_us;
+    }
+    have_sample_ = true;
     next.active = sample.active;
     next.finger_count = sample.finger_count;
     next.relative_x = sample.relative_x;

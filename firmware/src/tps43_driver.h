@@ -34,6 +34,8 @@ struct Tps43Sample {
     // compact fields above; it does not make the compact sample invalid.
     bool contact_details_available = false;
     std::array<Tps43Contact, TPS43_MAX_CONTACTS> contacts{};
+    // Acquisition time in microseconds on the coordinator clock, preserved
+    // while this result is retained between service calls.
     uint64_t timestamp_us = 0;
 };
 
@@ -41,9 +43,15 @@ class Tps43Driver {
    public:
     virtual ~Tps43Driver() = default;
 
-    // Perform one bounded, non-blocking hardware service step. sample() then
-    // returns the latest coherent result produced by the driver.
-    virtual void service(uint64_t now_us) = 0;
+    // Perform one bounded, non-blocking hardware step at now_us (microseconds).
+    // sample() then
+    // returns the latest coherent result produced by the driver. Return true
+    // only when this call publishes a new complete acquisition, even if its
+    // values or timestamp equal the preceding acquisition. False retains the
+    // prior sample (including before the first acquisition); it is not a
+    // stationary report or a synthetic release.
+    virtual bool service(uint64_t now_us) = 0;
+    // Returns the latest complete acquisition without consuming or changing it.
     virtual Tps43Sample sample() const = 0;
 };
 

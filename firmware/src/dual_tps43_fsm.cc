@@ -389,28 +389,27 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
 
     if (actions.cursor_x != 0 || actions.cursor_y != 0) {
         const ScaledDelta cursor = scale_active_delta(
-            actions.cursor_x, actions.cursor_y, snapshot.cycle_timestamp_us, tuning_.cursor_gain, cursor_motion_);
+            actions.cursor_x, actions.cursor_y, snapshot.right.sample_interval_us, tuning_.cursor_gain, cursor_motion_);
         actions.cursor_x = cursor.x;
         actions.cursor_y = cursor.y;
-    } else {
+    } else if (snapshot.right.fresh_sample) {
         // Velocity history and fractional output must not move the cursor after
         // the normalized input stops.
-        stop_cursor_motion(snapshot.cycle_timestamp_us);
+        stop_cursor_motion();
     }
 
     if (scroll_source_this_cycle_ != ScrollSource::None) {
         if (scroll_motion_.source != scroll_source_this_cycle_) {
-            const uint64_t last_timestamp_us = scroll_motion_.active_gain.last_timestamp_us;
             scroll_motion_.active_gain = {};
-            scroll_motion_.active_gain.last_timestamp_us = last_timestamp_us;
             scroll_motion_.filtered_velocity_x_q8_per_second = 0;
             scroll_motion_.filtered_velocity_y_q8_per_second = 0;
         }
 
         scroll_motion_.source = scroll_source_this_cycle_;
         stop_scroll_momentum();
+        const PadState& source = scroll_source_this_cycle_ == ScrollSource::Left ? snapshot.left : snapshot.right;
         const ScaledDelta scroll = scale_active_delta(
-            actions.scroll_x, actions.scroll_y, snapshot.cycle_timestamp_us, tuning_.scroll_gain,
+            actions.scroll_x, actions.scroll_y, source.sample_interval_us, tuning_.scroll_gain,
             scroll_motion_.active_gain);
         actions.scroll_x = scroll.x;
         actions.scroll_y = scroll.y;
@@ -422,10 +421,15 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
     actions.scroll_y = 0;
     if (scroll_motion_.source != ScrollSource::None) {
         if (scroll_source_active(snapshot)) {
+            const PadState& source = scroll_motion_.source == ScrollSource::Left ? snapshot.left : snapshot.right;
+            // No acquisition is not evidence of zero sensor velocity.
+            if (!source.fresh_sample) {
+                return;
+            }
             // A stationary contact produces no output but contributes a zero
             // velocity sample, preventing stale fast motion from seeding coast.
             const ScaledDelta stationary = scale_active_delta(
-                0, 0, snapshot.cycle_timestamp_us, tuning_.scroll_gain, scroll_motion_.active_gain);
+                0, 0, source.sample_interval_us, tuning_.scroll_gain, scroll_motion_.active_gain);
             update_scroll_release_velocity(stationary);
             return;
         }
@@ -440,22 +444,21 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
 
     if (scroll_motion_.momentum_active) {
         apply_scroll_momentum(snapshot.cycle_timestamp_us, actions);
-    } else {
-        // Retain the preceding logical-cycle time before the first scroll
-        // sample so its velocity need not use the fallback interval.
-        scroll_motion_.active_gain.last_timestamp_us = snapshot.cycle_timestamp_us;
     }
 }
 
 DualTps43Fsm::ScaledDelta DualTps43Fsm::scale_active_delta(
     int32_t x,
     int32_t y,
-    uint64_t now_us,
+    uint64_t acquisition_interval_us,
     const VelocityGainTuning& tuning,
     VelocityGainState& state) const {
     ScaledDelta result;
-    result.sample_interval_us = sample_interval_us(
-        now_us, state.last_timestamp_us, tuning.fallback_sample_interval_us);
+    const uint64_t interval = acquisition_interval_us != 0
+                                  ? acquisition_interval_us
+                                  : std::max<uint32_t>(tuning.fallback_sample_interval_us, 1);
+    result.sample_interval_us = static_cast<uint32_t>(
+        std::min<uint64_t>(interval, std::numeric_limits<uint32_t>::max()));
 
     const uint64_t magnitude = vector_magnitude(x, y);
     const uint64_t raw_speed = magnitude * 1000000ULL / result.sample_interval_us;
@@ -470,8 +473,7 @@ DualTps43Fsm::ScaledDelta DualTps43Fsm::scale_active_delta(
     return result;
 }
 
-void DualTps43Fsm::stop_cursor_motion(uint64_t now_us) {
-    cursor_motion_.last_timestamp_us = now_us;
+void DualTps43Fsm::stop_cursor_motion() {
     cursor_motion_.filtered_speed_pad_units_per_second = 0;
     cursor_motion_.residual_x_q8 = 0;
     cursor_motion_.residual_y_q8 = 0;
