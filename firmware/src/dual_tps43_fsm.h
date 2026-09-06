@@ -113,6 +113,8 @@ class DualTps43Fsm : public DualPadProcessor {
         uint32_t id = 0;
         uint64_t started_us = 0;
         bool movement_seen = false;
+        // Identity of the opposite touch already active when this session began.
+        uint32_t preceding_other_session_id = 0;
     };
 
     struct VelocityGainState {
@@ -149,7 +151,7 @@ class DualTps43Fsm : public DualPadProcessor {
     };
 
     // Session and interaction-policy helpers.
-    void begin_session_if_needed(const PadState& pad, SessionState& session, uint64_t now_us);
+    void begin_session_if_needed(const PadState& pad, SessionState& session, uint64_t now_us, uint32_t preceding_other_session_id);
     bool is_stationary(const PadState& pad, const SessionState& session, uint64_t now_us) const;
     bool is_eligible_tap(const PadState& pad, const SessionState& session, bool tap_event, bool consumed) const;
     bool reached_neutral_threshold(int64_t x, int64_t y) const;

@@ -17,8 +17,10 @@ LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
     const bool left_was_moving = left_session_.movement_seen;
     const bool right_was_moving = right_session_.movement_seen;
 
-    begin_session_if_needed(snapshot.left, left_session_, snapshot.cycle_timestamp_us);
-    begin_session_if_needed(snapshot.right, right_session_, snapshot.cycle_timestamp_us);
+    begin_session_if_needed(snapshot.left, left_session_, snapshot.cycle_timestamp_us,
+        previous_right_active_ && snapshot.right.active && !snapshot.right.touch_started ? snapshot.right.session_id : 0);
+    begin_session_if_needed(snapshot.right, right_session_, snapshot.cycle_timestamp_us,
+        previous_left_active_ && snapshot.left.active && !snapshot.left.touch_started ? snapshot.left.session_id : 0);
 
     const bool left_was_stationary = previous_left_active_ && !left_was_moving &&
                                      is_stationary(snapshot.left, left_session_, snapshot.cycle_timestamp_us);
@@ -61,7 +63,7 @@ LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
     return actions;
 }
 
-void DualTps43Fsm::begin_session_if_needed(const PadState& pad, SessionState& session, uint64_t now_us) {
+void DualTps43Fsm::begin_session_if_needed(const PadState& pad, SessionState& session, uint64_t now_us, uint32_t preceding_other_session_id) {
     if (!pad.touch_started && (pad.session_id == session.id || !pad.active)) {
         return;
     }
@@ -69,6 +71,7 @@ void DualTps43Fsm::begin_session_if_needed(const PadState& pad, SessionState& se
     session.id = pad.session_id;
     session.started_us = pad.timestamp_us != 0 ? pad.timestamp_us : now_us;
     session.movement_seen = false;
+    session.preceding_other_session_id = preceding_other_session_id;
 }
 
 bool DualTps43Fsm::is_stationary(const PadState& pad, const SessionState& session, uint64_t now_us) const {
@@ -253,6 +256,20 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
         return process_neutral(snapshot);
     }
 
+    // Releasing the earlier unmoved touch abandons this stationary overlap,
+    // even without a sensor tap event (for example after a long hold). Consume
+    // releases only: the remaining pad can still move or host a new tap session.
+    const bool earlier_left_released = snapshot.left.touch_ended && snapshot.right.active &&
+                                       right_session_.preceding_other_session_id == snapshot.left.session_id;
+    const bool earlier_right_released = snapshot.right.touch_ended && snapshot.left.active &&
+                                        left_session_.preceding_other_session_id == snapshot.right.session_id;
+    if ((earlier_left_released || earlier_right_released) &&
+        !left_session_.movement_seen && !right_session_.movement_seen) {
+        consume_left_session(snapshot.left);
+        consume_right_session(snapshot.right);
+        return {};
+    }
+
     const bool left_tap =
         is_eligible_tap(snapshot.left, left_session_, snapshot.left.single_tap, left_session_consumed(snapshot.left));
     const bool right_tap =
@@ -263,7 +280,7 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
     if (left_tap && previous_right_active_) {
         consume_left_session(snapshot.left);
         consume_right_session(snapshot.right);
-        if (right_was_stationary) {
+        if (right_was_stationary && left_session_.preceding_other_session_id == snapshot.right.session_id) {
             LogicalActions actions;
             actions.left_button = ButtonAction::Click;
             return actions;
@@ -274,7 +291,7 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
     if (right_tap && previous_left_active_) {
         consume_left_session(snapshot.left);
         consume_right_session(snapshot.right);
-        if (left_was_stationary) {
+        if (left_was_stationary && right_session_.preceding_other_session_id == snapshot.left.session_id) {
             LogicalActions actions;
             actions.right_button = ButtonAction::Click;
             return actions;
@@ -396,6 +413,15 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
         // Velocity history and fractional output must not move the cursor after
         // the normalized input stops.
         stop_cursor_motion();
+    }
+
+    if (mode_ == Mode::RightLatchedDrag) {
+        // A finger-count transition can enter the latch without a new touch.
+        // Discard the preceding scroll source and its launch history, not just
+        // active momentum, so a later lift cannot restart scrolling.
+        scroll_motion_ = {};
+        actions.scroll_x = actions.scroll_y = 0;
+        return;
     }
 
     if (scroll_source_this_cycle_ != ScrollSource::None) {

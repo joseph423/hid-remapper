@@ -496,6 +496,90 @@ int main() {
         require_no_action(left_drag.step(one_finger(), three_finger(2, 1, true)));
     });
 
+    run_case("PAD-37 reverse-order stationary releases", [] {
+        for (bool right_first : { false, true }) {
+            for (bool reports_tap : { false, true }) {
+                Harness harness;
+                require_no_action(harness.step(right_first ? inactive() : one_finger(),
+                    right_first ? one_finger() : inactive()));
+                require_no_action(harness.step(right_first ? inactive() : one_finger(),
+                    right_first ? one_finger() : inactive(), 200));
+                require_no_action(harness.step(one_finger(), one_finger()));
+                const Tps43Sample release = reports_tap ? single_tap_release() : inactive();
+                require_no_action(harness.step(right_first ? one_finger() : release,
+                    right_first ? release : one_finger(), 300));
+                require_no_action(harness.step(right_first ? single_tap_release() : inactive(),
+                    right_first ? inactive() : single_tap_release()));
+            }
+        }
+    });
+
+    run_case("PAD-38 remaining touch after reverse release", [] {
+        for (int followup = 0; followup < 4; followup++) {
+            Harness harness;
+            require_no_action(harness.step(inactive(), one_finger()));
+            require_no_action(harness.step(inactive(), one_finger(), 200));
+            require_no_action(harness.step(one_finger(), one_finger()));
+            require_no_action(harness.step(one_finger(), single_tap_release(), 300));
+            if (followup == 0) {
+                require_no_action(harness.step(one_finger(), one_finger()));
+                const LogicalActions click = harness.step(one_finger(), single_tap_release());
+                require(click.right_button == ButtonAction::Click && click.left_button == ButtonAction::None,
+                    "a new Right tap after suppression must Right-click");
+                require_no_action(harness.step(single_tap_release(), inactive()));
+            } else if (followup == 1) {
+                const LogicalActions drag = harness.step(one_finger(), one_finger(2, 1));
+                require(drag.left_button == ButtonAction::Press && drag.cursor_x == 4 && drag.cursor_y == 2,
+                    "remaining Left must support Left-assisted Drag");
+                require(harness.step(inactive(), one_finger()).left_button == ButtonAction::Release,
+                    "Left release must still drop the drag");
+            } else {
+                require(harness.step(one_finger(0, 2), inactive()).scroll_y == 6,
+                    "remaining Left must still start scrolling");
+                if (followup == 2) {
+                    require_no_action(harness.step(one_finger(), one_finger()));
+                    const LogicalActions click = harness.step(one_finger(), single_tap_release());
+                    require(click.left_button == ButtonAction::Click && click.right_button == ButtonAction::None,
+                        "Right tap during subsequent Left-scroll must Left-click");
+                    require(harness.step(one_finger(0, 1), inactive()).scroll_y == 3,
+                        "Left-scroll must remain active after the click");
+                } else {
+                    const LogicalActions both = harness.step(one_finger(0, 1), one_finger(2, 0));
+                    require(both.scroll_y == 3 && both.cursor_x == 4 && both.left_button == ButtonAction::None,
+                        "subsequent Left-scroll and Right cursor must coexist");
+                }
+            }
+        }
+        Harness mirror;
+        require_no_action(mirror.step(one_finger(), inactive()));
+        require_no_action(mirror.step(one_finger(), inactive(), 200));
+        require_no_action(mirror.step(one_finger(), one_finger()));
+        require_no_action(mirror.step(single_tap_release(), one_finger(), 300));
+        for (int tap = 0; tap < 2; tap++) {
+            require_no_action(mirror.step(one_finger(), one_finger()));
+            require(mirror.step(single_tap_release(), one_finger()).left_button == ButtonAction::Click,
+                "remaining Right must support repeated new Left taps");
+        }
+        require_no_action(mirror.step(inactive(), single_tap_release()));
+    });
+
+    run_case("PAD-39 reverse release before later stationary threshold", [] {
+        Harness harness;
+        require_no_action(harness.step(one_finger(), inactive()));
+        require_no_action(harness.step(one_finger(), inactive(), 200));
+        require_no_action(harness.step(one_finger(), one_finger()));
+        require_no_action(harness.step(inactive(), one_finger(), 50));
+        require_no_action(harness.step(inactive(), single_tap_release()));
+
+        Harness movement;
+        require_no_action(movement.step(one_finger(), inactive()));
+        require_no_action(movement.step(one_finger(), inactive(), 200));
+        require_no_action(movement.step(one_finger(), one_finger()));
+        require_no_action(movement.step(single_tap_release(), one_finger(), 300));
+        require(movement.step(inactive(), one_finger(2, 0)).cursor_x == 4,
+            "consuming the remaining Right release must not disable cursor movement");
+    });
+
     std::cout << "Phase 5 matrix result: " << passes << " passed, " << failures << " failed\n";
     return failures == 0 ? 0 : 1;
 }

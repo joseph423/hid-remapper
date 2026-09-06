@@ -48,6 +48,26 @@ Tps43Sample two_finger(int32_t x = 0, int32_t y = 0) {
     return sample;
 }
 
+// Supplies complete non-contiguous contact slots so normalization establishes
+// a real centroid baseline before the entry movement.
+Tps43Sample three_finger(uint16_t offset) {
+    Tps43Sample sample;
+    sample.active = true;
+    sample.finger_count = 3;
+    sample.contact_details_available = true;
+    sample.movement_reported = offset != 0;
+    for (int slot : { 0, 2, 4 }) {
+        sample.contacts[slot] = { true, static_cast<uint16_t>(100 + offset + slot), 100, 10, 1 };
+    }
+    return sample;
+}
+
+void require_no_scroll(const LogicalActions& actions) {
+    if (actions.scroll_x != 0 || actions.scroll_y != 0) {
+        throw std::runtime_error("Right-latched Drag must not emit retained scroll motion");
+    }
+}
+
 void require(bool condition, const std::string& message) {
     if (!condition) {
         throw std::runtime_error(message);
@@ -318,6 +338,56 @@ int main() {
             "consecutive sub-unit momentum displacements must accumulate into output");
         require_no_cursor_or_buttons(first);
         require_no_cursor_or_buttons(second);
+    });
+
+    run_case("MOTION-11 scroll-history-cannot-escape-right-latch", [] {
+        for (uint16_t weight : { 128, 256 }) {
+            DualTps43Tuning tuning = motion_tuning();
+            tuning.scroll_momentum.release_velocity_filter_weight_q8 = weight;
+            tuning.scroll_momentum.stop_velocity_logical_units_per_second = 0;
+            Harness harness(tuning);
+            harness.step(inactive(), two_finger(), 10000);
+            require(harness.step(inactive(), two_finger(10, 20), 10000).scroll_y > 0,
+                "setup must establish scroll history");
+            require_no_scroll(harness.step(inactive(), three_finger(0), 10000));
+            const LogicalActions entry = harness.step(inactive(), three_finger(10), 10000);
+            require_no_scroll(entry);
+            require(entry.left_button == ButtonAction::Press && entry.cursor_x == 40,
+                "drag entry must press and retain velocity-scaled centroid movement");
+            const LogicalActions continued = harness.step(inactive(), three_finger(20), 10000);
+            require_no_scroll(continued);
+            require(continued.cursor_x == 40 && continued.left_button == ButtonAction::None,
+                "continued centroid movement must retain the latch");
+            for (int cycle = 0; cycle < 5; cycle++) {
+                const LogicalActions inactive_cycle = harness.step(inactive(), inactive(), 10000);
+                require_no_scroll(inactive_cycle);
+                require_no_cursor_or_buttons(inactive_cycle);
+            }
+            require_no_scroll(harness.step(one_finger(0, 10), two_finger(0, 10), 10000));
+            const LogicalActions cursor = harness.step(inactive(), one_finger(10, 0), 10000);
+            require_no_scroll(cursor);
+            require(cursor.cursor_x == 40 && cursor.left_button == ButtonAction::None,
+                "one-finger cursor must continue while latched");
+            require_no_scroll(harness.step(inactive(), inactive(), 10000));
+            require_no_scroll(harness.step(inactive(), one_finger(), 10000));
+            Tps43Sample tap;
+            tap.single_tap = true;
+            const LogicalActions drop = harness.step(inactive(), tap, 10000);
+            require_no_scroll(drop);
+            require(drop.left_button == ButtonAction::Release && drop.right_button == ButtonAction::None,
+                "distinct tap must drop without an extra click");
+            const LogicalActions after_drop = harness.step(inactive(), inactive(), 10000);
+            require_no_scroll(after_drop);
+            require_no_cursor_or_buttons(after_drop);
+
+            // Clearing drag history must not disable a later ordinary scroll.
+            harness.step(inactive(), two_finger(), 10000);
+            require(harness.step(inactive(), two_finger(0, 20), 10000).scroll_y > 0,
+                "fresh scrolling after drop must remain usable");
+            harness.step(inactive(), inactive(), 10000);
+            require(harness.step(inactive(), inactive(), 10000).scroll_y > 0,
+                "fresh ordinary release must still launch momentum");
+        }
     });
 
     std::cout << "Motion result: " << passes << " passed, " << failures << " failed\n";
