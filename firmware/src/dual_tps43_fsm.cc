@@ -415,8 +415,8 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
         stop_cursor_motion();
     }
 
-    if (mode_ == Mode::RightLatchedDrag) {
-        // A finger-count transition can enter the latch without a new touch.
+    if (mode_ == Mode::RightLatchedDrag || mode_ == Mode::LeftAssistedDrag) {
+        // A finger-count transition can enter either drag without a new touch.
         // Discard the preceding scroll source and its launch history, not just
         // active momentum, so a later lift cannot restart scrolling.
         scroll_motion_ = {};

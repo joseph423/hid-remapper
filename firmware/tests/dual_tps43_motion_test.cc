@@ -64,7 +64,7 @@ Tps43Sample three_finger(uint16_t offset) {
 
 void require_no_scroll(const LogicalActions& actions) {
     if (actions.scroll_x != 0 || actions.scroll_y != 0) {
-        throw std::runtime_error("Right-latched Drag must not emit retained scroll motion");
+        throw std::runtime_error("Drag must not emit retained scroll motion");
     }
 }
 
@@ -387,6 +387,51 @@ int main() {
             harness.step(inactive(), inactive(), 10000);
             require(harness.step(inactive(), inactive(), 10000).scroll_y > 0,
                 "fresh ordinary release must still launch momentum");
+        }
+    });
+
+    run_case("MOTION-12 scroll-history-cannot-escape-left-assisted-drag", [] {
+        for (uint16_t weight : { 128, 256 }) {
+            DualTps43Tuning tuning = motion_tuning();
+            tuning.scroll_momentum.release_velocity_filter_weight_q8 = weight;
+            tuning.scroll_momentum.stop_velocity_logical_units_per_second = 0;
+            Harness harness(tuning);
+            harness.step(one_finger(), inactive(), 10000);
+            harness.step(one_finger(), inactive(), 200000);
+            require(harness.step(one_finger(), two_finger(10, 20), 10000).scroll_y > 0,
+                "setup must establish Right scroll history against stationary Left");
+
+            // No new touch occurs at entry: changing finger count must discard
+            // launch history even when a partial filter would retain velocity.
+            const LogicalActions entry = harness.step(one_finger(), one_finger(10, 0), 10000);
+            require_no_scroll(entry);
+            require(entry.left_button == ButtonAction::Press && entry.cursor_x == 40,
+                "Left-assisted entry must press and retain scaled cursor movement");
+            for (int cycle = 0; cycle < 5; cycle++) {
+                const LogicalActions lifted = harness.step(one_finger(), inactive(), 10000);
+                require_no_scroll(lifted);
+                require_no_cursor_or_buttons(lifted);
+            }
+            const LogicalActions retouch = harness.step(one_finger(), one_finger(10, 0), 10000);
+            require_no_scroll(retouch);
+            require(retouch.cursor_x == 40 && retouch.left_button == ButtonAction::None,
+                "Right retouch must continue cursor movement without another press");
+            require_no_scroll(harness.step(one_finger(0, 10), two_finger(0, 20), 10000));
+            require_no_scroll(harness.step(one_finger(), inactive(), 10000));
+            const LogicalActions drop = harness.step(inactive(), inactive(), 10000);
+            require_no_scroll(drop);
+            require(drop.left_button == ButtonAction::Release && drop.right_button == ButtonAction::None,
+                "Left release must drop without an extra click");
+            const LogicalActions after_drop = harness.step(inactive(), inactive(), 10000);
+            require_no_scroll(after_drop);
+            require_no_cursor_or_buttons(after_drop);
+
+            harness.step(inactive(), two_finger(), 10000);
+            require(harness.step(inactive(), two_finger(0, 20), 10000).scroll_y > 0,
+                "fresh scrolling after drop must remain usable");
+            harness.step(inactive(), inactive(), 10000);
+            require(harness.step(inactive(), inactive(), 10000).scroll_y > 0,
+                "fresh scrolling after drop must still launch momentum");
         }
     });
 
