@@ -265,6 +265,54 @@ int main() {
         require(harness.step(one_finger(0, 1), inactive()).scroll_y == 3, "Left-scroll mode must remain active after click");
     });
 
+    run_case("PAD-12A Right tap predates Left-scroll", [] {
+        Harness harness;
+        require_no_action(harness.step(inactive(), one_finger()));                  // 100 us
+        require_no_action(harness.step(inactive(), one_finger(), 200));             // 300 us
+        const LogicalActions entry = harness.step(one_finger(0, 2), one_finger());  // 400 us
+        require(entry.scroll_y == 6 && entry.left_button == ButtonAction::None &&
+                    entry.right_button == ButtonAction::None && entry.cursor_x == 0 && entry.cursor_y == 0,
+            "Left-scroll entry must scroll without consuming or clicking the held Right tap");
+        const LogicalActions click = harness.step(one_finger(0, 1), single_tap_release());  // 500 us
+        require(click.left_button == ButtonAction::Click && click.right_button == ButtonAction::None &&
+                    click.scroll_x == 0 && click.scroll_y == 3 && click.cursor_x == 0 && click.cursor_y == 0,
+            "eligible pre-existing Right tap must Left-click while Left continues scrolling");
+        const LogicalActions continued = harness.step(one_finger(0, 1), inactive());
+        require(continued.scroll_y == 3 && continued.left_button == ButtonAction::None &&
+                    continued.right_button == ButtonAction::None,
+            "Left scrolling must continue without another click");
+        require_no_action(harness.step(single_tap_release(), inactive()));
+        require_no_action(harness.step(inactive(), inactive()));
+    });
+
+    run_case("PAD-14A consumed Right survives Left-scroll entry", [] {
+        // A prior cross-pad click or suppressed overlap must retain consumption
+        // when the same held Right session later enters Left-scroll.
+        for (bool suppressed : { false, true }) {
+            Harness harness;
+            if (suppressed) {
+                require(harness.step(inactive(), one_finger(1, 0)).cursor_x == 2, "setup cursor missing");
+            } else {
+                require_no_action(harness.step(inactive(), one_finger()));
+            }
+            require_no_action(harness.step(inactive(), one_finger(), 200));
+            require_no_action(harness.step(one_finger(), one_finger()));
+            const LogicalActions prior = harness.step(single_tap_release(), one_finger());
+            require(prior.left_button == (suppressed ? ButtonAction::None : ButtonAction::Click),
+                "setup must distinguish suppressed overlap from cross-pad click");
+            require(harness.step(one_finger(0, 2), one_finger()).scroll_y == 6, "Left-scroll entry missing");
+            require_no_action(harness.step(one_finger(), single_tap_release()));
+            require(harness.step(one_finger(0, 1), inactive()).scroll_y == 3, "consumption must preserve scrolling");
+        }
+        Harness two_fingers;
+        require_no_action(two_fingers.step(inactive(), one_finger()));
+        require_no_action(two_fingers.step(inactive(), one_finger(), 200));
+        require(two_fingers.step(one_finger(0, 2), Tps43Sample{ true, 2 }).scroll_y == 6,
+            "Left-scroll entry with Right two fingers must scroll");
+        require_no_action(two_fingers.step(one_finger(), one_finger()));
+        require_no_action(two_fingers.step(one_finger(), single_tap_release()));
+    });
+
     run_case("PAD-13", [] {
         Harness harness;
         require_no_action(harness.step(inactive(), one_finger()));

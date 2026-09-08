@@ -303,16 +303,10 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
 
     if (snapshot.left.movement_reported) {
         mode_ = Mode::LeftScroll;
-        consume_left_session(snapshot.left);
-        if (snapshot.right.active) {
-            consume_right_session(snapshot.right);
-        }
-        LogicalActions actions;
-        add_left_scroll(snapshot.left, actions);
-        if (snapshot.right.active && snapshot.right.finger_count == 1 && snapshot.right.movement_reported) {
-            add_right_cursor(snapshot.right, actions);
-        }
-        return actions;
+        // Enter with the same eligibility rules as ongoing Left-scroll: a held
+        // Right tap is not suppressed merely by Left movement. Existing release
+        // consumption and ignored two-finger input still apply.
+        return process_left_scroll(snapshot);
     }
 
     if ((left_was_stationary || left_stationary_now) && snapshot.right.active && snapshot.right.finger_count == 1 &&
