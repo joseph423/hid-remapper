@@ -20,6 +20,7 @@ constexpr uint16_t kContactReportRegister = 0x0016;
 constexpr size_t kContactReportBytes = 35;
 constexpr size_t kContactSlots = 5;
 constexpr size_t kSamplesPerStage = 4;
+constexpr size_t kTransitionSamples = 7;
 constexpr uint16_t kEndCommunicationRegister = 0xEEEE;
 
 struct CompactReport {
@@ -68,6 +69,7 @@ void configure_rdy_input();
 void wait_for_operator();
 void wait_for_report_window();
 void capture_stage(const char* name, const char* action);
+bool capture_transition_sequence();
 [[noreturn]] void fail(const char* reason);
 
 }  // namespace
@@ -96,7 +98,9 @@ int main() {
     capture_stage("two-finger compact report", "place two fingers and move them together or separately");
     capture_stage("three-finger contacts and centroid", "place exactly three fingers and move them gently");
 
-    printf("RESULT: TPS43 compact and conditional contact report capture completed\n");
+    const bool transition_passed = capture_transition_sequence();
+    printf("transition_sequence_result=%s\n", transition_passed ? "pass" : "fail");
+    printf("RESULT: TPS43 compact, conditional contact, and transition report capture completed\n");
     while (true) {
         tight_loop_contents();
     }
@@ -309,6 +313,49 @@ void capture_stage(const char* name, const char* action) {
             print_contact_report(sample);
         }
     }
+}
+
+// Keep the approved transition order in one guided capture so missed and
+// spurious finger-count reports can be compared without changing production policy.
+bool capture_transition_sequence() {
+    constexpr uint8_t expected_finger_counts[kTransitionSamples] = { 0, 1, 2, 3, 2, 1, 0 };
+    constexpr const char* actions[kTransitionSamples] = {
+        "release all fingers and keep the pad inactive",
+        "release all fingers, then place one finger and hold it steady",
+        "release all fingers, then place two fingers and hold them steady",
+        "release all fingers, then place exactly three fingers and hold them steady",
+        "release all fingers, then place two fingers and hold them steady",
+        "release all fingers, then place one finger and hold it steady",
+        "release all fingers and keep the pad inactive",
+    };
+    bool all_transitions_match = true;
+
+    printf("STAGE: recorded finger-count transitions samples=%zu sequence=0->1->2->3->2->1->0\n",
+        kTransitionSamples);
+    for (size_t sample_number = 0; sample_number < kTransitionSamples; ++sample_number) {
+        printf("ACTION: %s; press Enter to capture transition sample %zu expected_finger_count=%u\n",
+            actions[sample_number], sample_number + 1, expected_finger_counts[sample_number]);
+        wait_for_operator();
+        wait_for_report_window();
+
+        ReportSample sample{};
+        if (!read_report_sample(sample)) {
+            fail("RESULT: TPS43 transition report capture failed");
+        }
+        print_compact_report(sample, sample_number + 1);
+        if (sample.contact_details_available) {
+            print_contact_report(sample);
+        }
+
+        const bool transition_matches =
+            sample.compact.number_of_fingers == expected_finger_counts[sample_number];
+        printf("transition_expected_finger_count=%u observed_finger_count=%u match=%s\n",
+            expected_finger_counts[sample_number], sample.compact.number_of_fingers,
+            transition_matches ? "yes" : "no");
+        all_transitions_match = all_transitions_match && transition_matches;
+    }
+
+    return all_transitions_match;
 }
 
 [[noreturn]] void fail(const char* reason) {
