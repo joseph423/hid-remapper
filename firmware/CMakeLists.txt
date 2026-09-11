@@ -233,6 +233,18 @@ pico_enable_stdio_usb(tps43_coordinate_probe 1)
 pico_enable_stdio_uart(tps43_coordinate_probe 0)
 pico_add_extra_outputs(tps43_coordinate_probe)
 
+add_executable(tps43_report_probe
+    src/tps43_report_probe.cc
+)
+target_link_libraries(tps43_report_probe
+    pico_stdlib
+    hardware_gpio
+    hardware_i2c
+)
+pico_enable_stdio_usb(tps43_report_probe 1)
+pico_enable_stdio_uart(tps43_report_probe 0)
+pico_add_extra_outputs(tps43_report_probe)
+
 add_executable(flash_b_side
     src/flash_b_side.cc
     dual_b_binary.c
