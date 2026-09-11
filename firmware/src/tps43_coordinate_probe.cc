@@ -14,7 +14,7 @@ constexpr uint8_t kSdaPin = 4;
 constexpr uint8_t kSclPin = 5;
 constexpr uint8_t kRdyPin = 8;
 constexpr uint32_t kI2cFrequency = 400000;
-constexpr uint16_t kAbsoluteCoordinateRegister = 0x0017;
+constexpr uint16_t kAbsoluteCoordinateRegister = 0x0016;
 constexpr size_t kAbsoluteCoordinateBytes = 4;
 constexpr uint16_t kEndCommunicationRegister = 0xEEEE;
 
