@@ -65,8 +65,8 @@ void print_compact_report(const ReportSample& sample, size_t sample_number);
 void print_contact_report(const ReportSample& sample);
 void configure_i2c();
 void configure_rdy_input();
-void wait_for_initial_rdy(const char* action);
-void wait_for_fresh_rdy(const char* action);
+void wait_for_operator();
+void wait_for_report_window();
 void capture_stage(const char* name, const char* action);
 [[noreturn]] void fail(const char* reason);
 
@@ -272,20 +272,22 @@ void configure_rdy_input() {
     gpio_set_pulls(kRdyPin, false, false);
 }
 
-void wait_for_initial_rdy(const char* action) {
-    if (!gpio_get(kRdyPin)) {
-        printf("ACTION: %s\n", action);
+void wait_for_operator() {
+    while (true) {
+        const int character = getchar_timeout_us(1000);
+        if (character == '\r' || character == '\n') {
+            break;
+        }
     }
-    while (!gpio_get(kRdyPin)) {
-        tight_loop_contents();
+
+    // The Windows monitor sends CRLF for Enter. Drain the paired line ending
+    // so it cannot advance the next sample without another operator action.
+    sleep_ms(10);
+    while (getchar_timeout_us(0) >= 0) {
     }
 }
 
-void wait_for_fresh_rdy(const char* action) {
-    while (gpio_get(kRdyPin)) {
-        tight_loop_contents();
-    }
-    printf("ACTION: %s\n", action);
+void wait_for_report_window() {
     while (!gpio_get(kRdyPin)) {
         tight_loop_contents();
     }
@@ -294,11 +296,9 @@ void wait_for_fresh_rdy(const char* action) {
 void capture_stage(const char* name, const char* action) {
     printf("STAGE: %s samples=%zu\n", name, kSamplesPerStage);
     for (size_t sample_number = 1; sample_number <= kSamplesPerStage; ++sample_number) {
-        if (sample_number == 1) {
-            wait_for_initial_rdy(action);
-        } else {
-            wait_for_fresh_rdy(action);
-        }
+        printf("ACTION: %s; press Enter to capture sample %zu\n", action, sample_number);
+        wait_for_operator();
+        wait_for_report_window();
 
         ReportSample sample{};
         if (!read_report_sample(sample)) {
