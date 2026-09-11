@@ -333,9 +333,13 @@ bool capture_transition_sequence() {
     printf("STAGE: recorded finger-count transitions samples=%zu sequence=0->1->2->3->2->1->0\n",
         kTransitionSamples);
     for (size_t sample_number = 0; sample_number < kTransitionSamples; ++sample_number) {
-        printf("ACTION: %s; press Enter to capture transition sample %zu expected_finger_count=%u\n",
-            actions[sample_number], sample_number + 1, expected_finger_counts[sample_number]);
+        printf("ACTION: press Enter to arm transition sample %zu expected_finger_count=%u; then %s\n",
+            sample_number + 1, expected_finger_counts[sample_number], actions[sample_number]);
         wait_for_operator();
+
+        // RDY announces a sensor event. Arm the host before the physical state
+        // changes so a release-to-zero event is not missed before Enter.
+        printf("ACTION: %s; waiting for RDY\n", actions[sample_number]);
         wait_for_report_window();
 
         ReportSample sample{};
