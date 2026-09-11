@@ -209,6 +209,18 @@ pico_enable_stdio_usb(tps43_rdy_probe 1)
 pico_enable_stdio_uart(tps43_rdy_probe 0)
 pico_add_extra_outputs(tps43_rdy_probe)
 
+add_executable(tps43_reset_probe
+    src/tps43_reset_probe.cc
+)
+target_link_libraries(tps43_reset_probe
+    pico_stdlib
+    hardware_gpio
+    hardware_i2c
+)
+pico_enable_stdio_usb(tps43_reset_probe 1)
+pico_enable_stdio_uart(tps43_reset_probe 0)
+pico_add_extra_outputs(tps43_reset_probe)
+
 add_executable(flash_b_side
     src/flash_b_side.cc
     dual_b_binary.c
