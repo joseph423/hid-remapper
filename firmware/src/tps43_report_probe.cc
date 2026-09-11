@@ -57,10 +57,11 @@ struct ReportSample {
 uint16_t read_big_endian_u16(const uint8_t* data);
 int16_t read_big_endian_i16(const uint8_t* data);
 bool read_register(uint16_t address, uint8_t* data, size_t length);
+bool read_register_forced(uint16_t address, uint8_t* data, size_t length);
 bool end_communication_window();
-bool read_compact_report(CompactReport& report, uint32_t& duration_us);
-bool read_contact_report(ReportSample& sample);
-bool read_report_sample(ReportSample& sample);
+bool read_compact_report(CompactReport& report, uint32_t& duration_us, bool force_communication);
+bool read_contact_report(ReportSample& sample, bool force_communication);
+bool read_report_sample(ReportSample& sample, bool force_communication);
 void decode_contact(Contact& contact, const uint8_t* data);
 void print_compact_report(const ReportSample& sample, size_t sample_number);
 void print_contact_report(const ReportSample& sample);
@@ -132,6 +133,17 @@ bool read_register(uint16_t address, uint8_t* data, size_t length) {
     return i2c_read_blocking(kI2c, kI2cAddress, data, length, false) == static_cast<int>(length);
 }
 
+bool read_register_forced(uint16_t address, uint8_t* data, size_t length) {
+    if (read_register(address, data, length)) {
+        return true;
+    }
+
+    // Event-mode devices may NACK the first forced request while waking from
+    // low power. The B000 protocol requires a retry after at least 150 us.
+    sleep_us(150);
+    return read_register(address, data, length);
+}
+
 bool end_communication_window() {
     const uint8_t register_address_and_data[] = {
         static_cast<uint8_t>(kEndCommunicationRegister >> 8),
@@ -144,10 +156,12 @@ bool end_communication_window() {
            static_cast<int>(sizeof(register_address_and_data));
 }
 
-bool read_compact_report(CompactReport& report, uint32_t& duration_us) {
+bool read_compact_report(CompactReport& report, uint32_t& duration_us, bool force_communication) {
     uint8_t data[kCompactReportBytes] = {};
     const uint32_t started_us = time_us_32();
-    if (!read_register(kCompactReportRegister, data, sizeof(data))) {
+    const bool read_succeeded = force_communication ? read_register_forced(kCompactReportRegister, data, sizeof(data))
+                                                    : read_register(kCompactReportRegister, data, sizeof(data));
+    if (!read_succeeded) {
         duration_us = time_us_32() - started_us;
         return false;
     }
@@ -171,10 +185,13 @@ void decode_contact(Contact& contact, const uint8_t* data) {
     contact.area = data[6];
 }
 
-bool read_contact_report(ReportSample& sample) {
+bool read_contact_report(ReportSample& sample, bool force_communication) {
     uint8_t data[kContactReportBytes] = {};
     const uint32_t started_us = time_us_32();
-    if (!read_register(kContactReportRegister, data, sizeof(data))) {
+    const bool read_succeeded =
+        force_communication ? read_register_forced(kContactReportRegister, data, sizeof(data))
+                            : read_register(kContactReportRegister, data, sizeof(data));
+    if (!read_succeeded) {
         sample.contact_read_us = time_us_32() - started_us;
         return false;
     }
@@ -203,16 +220,16 @@ bool read_contact_report(ReportSample& sample) {
     return true;
 }
 
-bool read_report_sample(ReportSample& sample) {
+bool read_report_sample(ReportSample& sample, bool force_communication) {
     const uint32_t started_us = time_us_32();
-    if (!read_compact_report(sample.compact, sample.compact_read_us)) {
+    if (!read_compact_report(sample.compact, sample.compact_read_us, force_communication)) {
         end_communication_window();
         return false;
     }
 
     if (sample.compact.number_of_fingers == 3) {
         sample.contact_details_available = true;
-        if (!read_contact_report(sample)) {
+        if (!read_contact_report(sample, force_communication)) {
             end_communication_window();
             return false;
         }
@@ -305,7 +322,7 @@ void capture_stage(const char* name, const char* action) {
         wait_for_report_window();
 
         ReportSample sample{};
-        if (!read_report_sample(sample)) {
+        if (!read_report_sample(sample, false)) {
             fail("RESULT: TPS43 report capture failed");
         }
         print_compact_report(sample, sample_number);
@@ -332,18 +349,14 @@ bool capture_transition_sequence() {
 
     printf("STAGE: recorded finger-count transitions samples=%zu sequence=0->1->2->3->2->1->0\n",
         kTransitionSamples);
+    printf("transition_read_mode=forced_after_operator_confirmation\n");
     for (size_t sample_number = 0; sample_number < kTransitionSamples; ++sample_number) {
-        printf("ACTION: press Enter to arm transition sample %zu expected_finger_count=%u; then %s\n",
-            sample_number + 1, expected_finger_counts[sample_number], actions[sample_number]);
+        printf("ACTION: %s; press Enter after the requested state is stable for transition sample %zu expected_finger_count=%u\n",
+            actions[sample_number], sample_number + 1, expected_finger_counts[sample_number]);
         wait_for_operator();
 
-        // RDY announces a sensor event. Arm the host before the physical state
-        // changes so a release-to-zero event is not missed before Enter.
-        printf("ACTION: %s; waiting for RDY\n", actions[sample_number]);
-        wait_for_report_window();
-
         ReportSample sample{};
-        if (!read_report_sample(sample)) {
+        if (!read_report_sample(sample, true)) {
             fail("RESULT: TPS43 transition report capture failed");
         }
         print_compact_report(sample, sample_number + 1);
