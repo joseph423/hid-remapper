@@ -198,6 +198,17 @@ pico_enable_stdio_usb(tps43_i2c_probe 1)
 pico_enable_stdio_uart(tps43_i2c_probe 0)
 pico_add_extra_outputs(tps43_i2c_probe)
 
+add_executable(tps43_rdy_probe
+    src/tps43_rdy_probe.cc
+)
+target_link_libraries(tps43_rdy_probe
+    pico_stdlib
+    hardware_i2c
+)
+pico_enable_stdio_usb(tps43_rdy_probe 1)
+pico_enable_stdio_uart(tps43_rdy_probe 0)
+pico_add_extra_outputs(tps43_rdy_probe)
+
 add_executable(flash_b_side
     src/flash_b_side.cc
     dual_b_binary.c
