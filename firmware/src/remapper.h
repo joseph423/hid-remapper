@@ -22,6 +22,10 @@ void do_handle_received_report(const uint8_t* report, int len, uint16_t interfac
 void handle_received_midi(uint8_t hub_port, uint8_t* midi_msg);
 void set_input_state(uint32_t usage, int32_t state_raw, int32_t state_scaled, uint8_t hub_port = 0);
 
+// Adds one logical TPS43 output cycle to Remapper-owned report buffers. This
+// is called by the action adapter before process_mapping() builds reports.
+void inject_tps43_output(int32_t cursor_x, int32_t cursor_y, int32_t scroll_x, int32_t scroll_y, bool left_button_held, bool right_button_held);
+
 void extra_init();
 void read_report(bool* new_report, bool* tick);
 

@@ -55,4 +55,20 @@ class Tps43Driver {
     virtual Tps43Sample sample() const = 0;
 };
 
+// Supplies an intentionally inactive pad to the coordinator while one-sensor
+// physical bring-up is in progress.
+class Tps43InactiveDriver final : public Tps43Driver {
+   public:
+    // Reports that no new acquisition exists and that the pad is inactive.
+    bool service(uint64_t now_us) override {
+        (void) now_us;
+        return false;
+    }
+
+    // Returns the unchanged inactive sample.
+    Tps43Sample sample() const override {
+        return {};
+    }
+};
+
 #endif

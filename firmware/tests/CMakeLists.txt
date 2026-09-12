@@ -37,3 +37,13 @@ target_compile_options(dual_tps43_motion_test PRIVATE -Wall -Wextra -Werror)
 target_include_directories(dual_tps43_motion_test PRIVATE ../src)
 
 add_test(NAME dual_tps43_motion_test COMMAND dual_tps43_motion_test)
+
+add_executable(tps43_timing_processor_test
+    tps43_timing_processor_test.cc
+    ../src/tps43_timing_processor.cc
+)
+target_compile_features(tps43_timing_processor_test PRIVATE cxx_std_17)
+target_compile_options(tps43_timing_processor_test PRIVATE -Wall -Wextra -Werror)
+target_include_directories(tps43_timing_processor_test PRIVATE ../src)
+
+add_test(NAME tps43_timing_processor_test COMMAND tps43_timing_processor_test)

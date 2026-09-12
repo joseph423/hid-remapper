@@ -35,6 +35,12 @@ add_executable(remapper
     src/dual_tps43_coordinator.cc
     src/dual_tps43_fsm.cc
     src/pad_state.cc
+    src/tps43_iqs5xx_driver.cc
+    src/tps43_timing_processor.cc
+    src/tps43_timing_metrics.cc
+    src/tps43_timing_capture.cc
+    src/tps43_cdc_stdio.cc
+    src/tps43_hid_adapter.cc
     src/crc.cc
     src/descriptor_parser.cc
     src/tinyusb_stuff.cc
@@ -57,6 +63,8 @@ target_compile_definitions(remapper PUBLIC PICO_DEFAULT_UART_RX_PIN=17)
 target_compile_definitions(remapper PUBLIC PICO_DEFAULT_PIO_USB_DP_PIN=0)
 endif()
 
+pico_enable_stdio_uart(remapper 0)
+
 target_include_directories(remapper PRIVATE
     src
     src/tusb_config_both
@@ -69,6 +77,7 @@ target_link_libraries(remapper
     hardware_pio
     hardware_dma
     hardware_flash
+    hardware_i2c
     $<$<STREQUAL:${PICO_BOARD},remapper_v8>:hardware_adc>
     tinyusb_device
     tinyusb_host

@@ -10,6 +10,7 @@
 #include "out_report.h"
 #include "remapper.h"
 #include "tick.h"
+#include "tps43_timing_metrics.h"
 
 static bool __no_inline_not_in_flash_func(manual_sof)(repeating_timer_t* rt) {
     pio_usb_host_frame();
@@ -45,7 +46,9 @@ void read_report(bool* new_report, bool* tick) {
     *tick = get_and_clear_tick_pending();
 
     reports_received = false;
+    const uint32_t host_service_started_us = time_us_32();
     tuh_task();
+    tps43_note_usb_host_service(time_us_32() - host_service_started_us);
     *new_report = reports_received;
 }
 

@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <queue>
 #include <set>
 #include <unordered_map>
@@ -16,6 +17,7 @@
 #include "our_descriptor.h"
 #include "platform.h"
 #include "remapper.h"
+#include "tps43_timing_metrics.h"
 
 #define MAX_REPORT_SIZE 64
 
@@ -1746,6 +1748,51 @@ void set_input_state(uint32_t usage, int32_t state_raw, int32_t state_scaled, ui
     if (state_ptr != NULL) {
         *state_ptr = state_scaled;
     }
+}
+
+void inject_tps43_output(int32_t cursor_x, int32_t cursor_y, int32_t scroll_x, int32_t scroll_y, bool left_button_held, bool right_button_held) {
+    constexpr uint32_t kMouseButton1Usage = 0x00090001;
+    constexpr uint32_t kMouseButton2Usage = 0x00090002;
+    constexpr uint32_t kMouseXUsage = 0x00010030;
+    constexpr uint32_t kMouseYUsage = 0x00010031;
+    constexpr uint32_t kMouseWheelUsage = 0x00010038;
+    constexpr uint32_t kMousePanUsage = 0x000C0238;
+
+    const auto add_relative = [](uint32_t usage, int32_t value) {
+        if (value == 0) {
+            return;
+        }
+
+        const auto search = our_usages_flat.find(usage);
+        if (search == our_usages_flat.end() || !search->second.is_relative ||
+            reports[search->second.report_id] == nullptr) {
+            return;
+        }
+
+        const int64_t updated = static_cast<int64_t>(accumulated[usage]) +
+                                static_cast<int64_t>(value) * 1000;
+        accumulated[usage] = static_cast<int32_t>(std::clamp<int64_t>(updated,
+            std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max()));
+    };
+
+    const auto set_button = [](uint32_t usage, bool pressed) {
+        const auto search = our_usages_flat.find(usage);
+        if (search == our_usages_flat.end() || search->second.size != 1 ||
+            reports[search->second.report_id] == nullptr) {
+            return;
+        }
+
+        put_bits(reports[search->second.report_id], report_sizes[search->second.report_id],
+            search->second.bitpos, search->second.size, pressed ? 1 : 0);
+    };
+
+    add_relative(kMouseXUsage, cursor_x);
+    add_relative(kMouseYUsage, cursor_y);
+    add_relative(kMouseWheelUsage, scroll_y);
+    add_relative(kMousePanUsage, scroll_x);
+    set_button(kMouseButton1Usage, left_button_held);
+    set_button(kMouseButton2Usage, right_button_held);
+    tps43_note_cursor_service(cursor_x != 0 || cursor_y != 0);
 }
 
 void rlencode(const std::set<uint64_t>& usage_ranges, std::vector<usage_rle_t>& output) {

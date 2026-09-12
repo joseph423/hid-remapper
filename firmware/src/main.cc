@@ -21,6 +21,7 @@
 #include "config.h"
 #include "crc.h"
 #include "descriptor_parser.h"
+#include "dual_tps43_coordinator.h"
 #include "globals.h"
 #include "i2c.h"
 #include "mcp4651.h"
@@ -28,6 +29,12 @@
 #include "platform.h"
 #include "remapper.h"
 #include "tick.h"
+#include "tps43_cdc_stdio.h"
+#include "tps43_hid_adapter.h"
+#include "tps43_iqs5xx_driver.h"
+#include "tps43_timing_capture.h"
+#include "tps43_timing_metrics.h"
+#include "tps43_timing_processor.h"
 
 // RP2350 UF2s wipe the last sector of flash every time
 // because of RP2350-E10 errata mitigation. So we put
@@ -41,6 +48,17 @@
 #define FLASH_CONFIG_IN_MEMORY (((uint8_t*) XIP_BASE) + CONFIG_OFFSET_IN_FLASH)
 
 #define ADC_USAGE_PAGE 0xFFF80000
+
+Tps43Iqs5xxDriver right_tps43_driver({ i2c0, 0x74, 4, 5, 8, 400000 });
+Tps43InactiveDriver left_tps43_driver;
+Tps43OnePadBringupProcessor tps43_processor;
+Tps43RemapperActionSink tps43_action_sink;
+DualTps43Coordinator tps43_coordinator(
+    left_tps43_driver,
+    right_tps43_driver,
+    tps43_processor,
+    tps43_action_sink);
+Tps43TimingCapture tps43_timing_capture;
 
 uint64_t next_print = 0;
 
@@ -255,6 +273,12 @@ int main() {
     extra_init();
     tusb_init();
     stdio_init_all();
+    tps43_cdc_stdio_init();
+
+    if (!right_tps43_driver.initialize()) {
+        printf("TPS43 Right-pad runtime initialization failed\n");
+    }
+    tps43_timing_capture.begin();
 
     tud_sof_isr_set(sof_handler);
 
@@ -279,13 +303,32 @@ int main() {
 #ifdef ADC_ENABLED
             read_adc();
 #endif
+            const uint64_t tick_now_us = time_us_64();
+            if (tps43_timing_capture.read_requested()) {
+                right_tps43_driver.request_forced_read();
+            }
+            tps43_coordinator.service(tick_now_us);
+            Tps43Sample diagnostic_contact_sample;
+            const Tps43Sample* diagnostic_contact_sample_ptr = nullptr;
+            if (tps43_timing_capture.wants_diagnostic_contact(
+                    right_tps43_driver.sample(), right_tps43_driver.timing())) {
+                right_tps43_driver.read_contact_report_for_diagnostic(diagnostic_contact_sample);
+                diagnostic_contact_sample_ptr = &diagnostic_contact_sample;
+            }
+            tps43_timing_capture.record(
+                tick_now_us, right_tps43_driver.sample(), right_tps43_driver.timing(),
+                diagnostic_contact_sample_ptr);
             process_mapping(true);
             write_gpio();
 #ifdef MCP4651_ENABLED
             mcp4651_write();
 #endif
         }
+        const uint32_t device_service_started_us = time_us_32();
         tud_task();
+        tps43_note_usb_device_service(time_us_32() - device_service_started_us);
+        tps43_cdc_stdio_flush();
+        tps43_timing_capture.poll_serial();
         if (boot_protocol_updated) {
             parse_our_descriptor();
             boot_protocol_updated = false;
