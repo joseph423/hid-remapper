@@ -16,19 +16,55 @@ void require(bool condition, const char* message) {
 int main() {
     Tps43OnePadBringupProcessor processor;
 
-    DualPadSnapshot moving_right;
-    moving_right.right.fresh_sample = true;
-    moving_right.right.active = true;
-    moving_right.right.finger_count = 1;
-    moving_right.right.movement_reported = true;
-    moving_right.right.relative_x = 12;
-    moving_right.right.relative_y = -7;
-    const LogicalActions movement = processor.process(moving_right);
-    require(movement.cursor_x == 12 && movement.cursor_y == -7,
-        "fresh Right one-finger movement must reach the logical cursor output");
-    require(movement.scroll_x == 0 && movement.scroll_y == 0 &&
-                movement.left_button == ButtonAction::None && movement.right_button == ButtonAction::None,
+    DualPadSnapshot flag_clear_movement;
+    flag_clear_movement.right.fresh_sample = true;
+    flag_clear_movement.right.active = true;
+    flag_clear_movement.right.finger_count = 1;
+    flag_clear_movement.right.relative_x = -12;
+    flag_clear_movement.right.relative_y = 7;
+    const LogicalActions flag_clear = processor.process(flag_clear_movement);
+    require(flag_clear.cursor_x == -12 && flag_clear.cursor_y == 7,
+        "fresh Right one-finger movement must forward deltas with a clear movement flag");
+    require(flag_clear.scroll_x == 0 && flag_clear.scroll_y == 0 &&
+                flag_clear.left_button == ButtonAction::None &&
+                flag_clear.right_button == ButtonAction::None,
         "one-finger movement must not create scroll or button output");
+
+    DualPadSnapshot flag_set_movement = flag_clear_movement;
+    flag_set_movement.right.movement_reported = true;
+    flag_set_movement.right.relative_x = 12;
+    flag_set_movement.right.relative_y = -7;
+    const LogicalActions flag_set = processor.process(flag_set_movement);
+    require(flag_set.cursor_x == 12 && flag_set.cursor_y == -7,
+        "fresh Right one-finger movement must forward deltas with a set movement flag");
+
+    DualPadSnapshot zero_movement = flag_clear_movement;
+    zero_movement.right.relative_x = 0;
+    zero_movement.right.relative_y = 0;
+    const LogicalActions zero = processor.process(zero_movement);
+    require(zero.cursor_x == 0 && zero.cursor_y == 0,
+        "fresh Right one-finger zero deltas must produce no cursor movement");
+
+    DualPadSnapshot stale_movement = flag_set_movement;
+    stale_movement.right.fresh_sample = false;
+    stale_movement.right.relative_x = 20;
+    stale_movement.right.relative_y = -13;
+    stale_movement.right.single_tap = true;
+    stale_movement.right.two_finger_tap = true;
+    const LogicalActions stale = processor.process(stale_movement);
+    require(stale.cursor_x == 0 && stale.cursor_y == 0 && stale.scroll_x == 0 &&
+                stale.scroll_y == 0 && stale.left_button == ButtonAction::None &&
+                stale.right_button == ButtonAction::None,
+        "stale samples must not replay movement or gesture events");
+
+    DualPadSnapshot inactive_movement = flag_set_movement;
+    inactive_movement.right.active = false;
+    inactive_movement.right.relative_x = 20;
+    inactive_movement.right.relative_y = -13;
+    const LogicalActions inactive = processor.process(inactive_movement);
+    require(inactive.cursor_x == 0 && inactive.cursor_y == 0 && inactive.scroll_x == 0 &&
+                inactive.scroll_y == 0,
+        "inactive samples must suppress relative movement");
 
     DualPadSnapshot one_finger_tap;
     one_finger_tap.right.fresh_sample = true;
@@ -52,6 +88,12 @@ int main() {
                 scroll.left_button == ButtonAction::None && scroll.right_button == ButtonAction::None,
         "two-finger movement must not create cursor or button output");
 
+    DualPadSnapshot two_finger_without_movement_status = two_finger_move;
+    two_finger_without_movement_status.right.movement_reported = false;
+    const LogicalActions suppressed_scroll = processor.process(two_finger_without_movement_status);
+    require(suppressed_scroll.scroll_x == 0 && suppressed_scroll.scroll_y == 0,
+        "two-finger scrolling must retain its movement-status condition");
+
     DualPadSnapshot two_finger_tap;
     two_finger_tap.right.fresh_sample = true;
     two_finger_tap.right.two_finger_tap = true;
@@ -59,20 +101,11 @@ int main() {
     require(right_click.right_button == ButtonAction::Click,
         "fresh Right two-finger tap must reach the Right-button output");
 
-    moving_right.right.fresh_sample = false;
-    moving_right.right.single_tap = true;
-    moving_right.right.two_finger_tap = true;
-    const LogicalActions retained = processor.process(moving_right);
-    require(retained.cursor_x == 0 && retained.cursor_y == 0 && retained.scroll_x == 0 &&
-                retained.scroll_y == 0 && retained.left_button == ButtonAction::None &&
-                retained.right_button == ButtonAction::None,
-        "retained state must not replay movement or gesture events");
-
-    moving_right.right.fresh_sample = true;
-    moving_right.right.finger_count = 3;
-    const LogicalActions three_finger = processor.process(moving_right);
-    require(three_finger.cursor_x == 0 && three_finger.cursor_y == 0 && three_finger.scroll_x == 0 &&
-                three_finger.scroll_y == 0,
+    DualPadSnapshot three_finger_input = flag_set_movement;
+    three_finger_input.right.finger_count = 3;
+    const LogicalActions three_finger = processor.process(three_finger_input);
+    require(three_finger.cursor_x == 0 && three_finger.cursor_y == 0 &&
+                three_finger.scroll_x == 0 && three_finger.scroll_y == 0,
         "three-finger timing input must not become one-pad cursor or scroll output");
 
     std::cout << "PASS tps43_one_pad_processor\n";
