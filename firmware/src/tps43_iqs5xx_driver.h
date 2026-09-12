@@ -22,6 +22,9 @@ struct Tps43ServiceTiming {
     uint32_t last_contact_read_us = 0;
     uint32_t last_diagnostic_contact_read_us = 0;
     uint32_t transfer_failures = 0;
+    uint32_t transfer_timeouts = 0;
+    uint32_t max_poll_us = 0;
+    uint32_t last_acquisition_us = 0;
     bool last_sample_had_contact_read = false;
     bool last_sample_published = false;
 };
@@ -36,18 +39,17 @@ class Tps43Iqs5xxDriver final : public Tps43Driver {
     // Configures the bus and RDY input. Returns false for an invalid bus.
     bool initialize();
 
-    // Performs one bounded report acquisition when RDY is high. Returns true
-    // only after the complete compact/contact transaction is published.
+    // Advances at most one transaction stage and 16 FIFO commands; never waits.
+    // Call between USB services, independently of the coordinator's 1 ms tick.
+    void poll();
+
+    // Consumes one completed acquisition; poll() acquires while RDY is high.
+    // Returns true only once per complete sample; now_us is the coordinator time.
     bool service(uint64_t now_us) override;
 
-    // Requests one operator-gated acquisition even when Event Mode leaves RDY
-    // low. The request is consumed by the next service call.
-    void request_forced_read();
-
-    // Reads the detailed contact block for bring-up diagnosis without
-    // publishing it as the production sample. The caller must use this only
-    // for an explicitly requested diagnostic mismatch.
-    bool read_contact_report_for_diagnostic(Tps43Sample& sample);
+    // Requests an asynchronous forced acquisition. Optional mismatch details
+    // are read in the same communication window, without changing gesture policy.
+    void request_forced_read(bool diagnose_contact_mismatch = false);
 
     // Returns the latest complete acquisition without changing it.
     Tps43Sample sample() const override;
@@ -56,17 +58,49 @@ class Tps43Iqs5xxDriver final : public Tps43Driver {
     const Tps43ServiceTiming& timing() const;
 
    private:
-    bool read_register(uint16_t address, uint8_t* data, uint8_t length);
-    bool read_register_forced(uint16_t address, uint8_t* data, uint8_t length);
-    bool end_communication_window();
-    bool read_compact_report(Tps43Sample& sample, bool force_communication);
-    bool read_contact_report(Tps43Sample& sample, bool force_communication);
+    enum class Stage { Idle,
+        Compact,
+        Contact,
+        Close,
+        Wake,
+        Reset,
+        RecoverClose };
+    enum class TransferResult { Pending,
+        Complete,
+        Failed };
+
+    void start_transfer(uint16_t address, uint8_t length, Stage stage);
+    TransferResult poll_transfer();
+    void fail_acquisition(bool timeout);
+    void reset_controller();
+    void restore_controller();
+    void decode_compact();
+    void decode_contacts();
 
     Tps43Iqs5xxConfig config_;
     Tps43Sample sample_;
     Tps43ServiceTiming timing_;
     bool initialized_ = false;
     bool forced_read_requested_ = false;
+    bool diagnostic_requested_ = false;
+    bool diagnostic_active_ = false;
+    bool sample_ready_ = false;
+    bool forced_active_ = false;
+    bool wake_retried_ = false;
+    bool recovery_close_attempted_ = false;
+    Stage stage_ = Stage::Idle;
+    Tps43Sample next_sample_;
+    uint8_t data_[35] = {};
+    uint16_t register_address_ = 0;
+    uint8_t read_length_ = 0;
+    uint8_t commands_sent_ = 0;
+    uint8_t bytes_received_ = 0;
+    uint64_t acquisition_started_us_ = 0;
+    uint64_t deadline_us_ = 0;
+    uint64_t transaction_started_us_ = 0;
+    uint64_t retry_after_us_ = 0;
+    // Preserve SDK-configured timing across peripheral-only fault recovery.
+    uint32_t con_ = 0, hcnt_ = 0, lcnt_ = 0, hold_ = 0, spklen_ = 0;
 };
 
 #endif

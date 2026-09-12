@@ -1447,7 +1447,30 @@ bool send_report(send_report_t do_send_report) {
         sent = do_send_report(0, outgoing_reports[or_head], report_sizes[report_id] + 1);
     }
 
-    // XXX even if not sent?
+    const uint64_t submission_timestamp_us = get_time();
+    // Measure only the parsed mouse report, including failed submission attempts.
+    // USB acceptance is not host receipt or on-screen presentation time.
+    const auto x_usage = our_usages_flat.find(0x00010030);
+    if (x_usage != our_usages_flat.end() && x_usage->second.report_id == report_id) {
+        const auto axis = [&](uint32_t usage) -> int32_t {
+            const auto it = our_usages_flat.find(usage);
+            if (it == our_usages_flat.end() || it->second.report_id != report_id) {
+                return 0;
+            }
+            const auto& def = it->second;
+            uint32_t value = get_bits(outgoing_reports[or_head] + 1, report_sizes[report_id], def.bitpos, def.size);
+            if (def.size > 0 && def.size < 32 && (value & (1u << (def.size - 1)))) {
+                value |= UINT32_MAX << def.size;
+            }
+            return static_cast<int32_t>(value);
+        };
+        tps43_normal_capture_note_usb(submission_timestamp_us, sent, axis(0x00010030), axis(0x00010031));
+    }
+    // A rejected submission must retain movement and button edges for retry.
+    if (!sent && our_descriptor == &our_descriptors[our_descriptor_number]) {
+        return false;
+    }
+
     or_head = (or_head + 1) % OR_BUFSIZE;
     or_items--;
 

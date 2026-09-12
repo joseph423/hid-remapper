@@ -23,7 +23,7 @@ void print_contact_slots(const Tps43Sample& sample) {
 }  // namespace
 
 void Tps43TimingCapture::begin() {
-    printf("TPS43 runtime timing capture\n");
+    printf("TPS43 async runtime timing capture; M = 15-second normal-use capture (no forced reads)\n");
     printf("STAGE: one-finger compact report samples=%zu\n", kCompactSamples);
     print_sample_prompt();
 }
@@ -61,15 +61,17 @@ void Tps43TimingCapture::record(
         }
 
         printf(
-            "timing_sample=%zu finger_count=%u expected=%s match=%s service_us=%lu "
-            "compact_read_us=%lu contact_read_us=%lu\n",
+            "timing_sample=%zu finger_count=%u expected=%s match=%s publish_us=%lu "
+            "compact_read_us=%lu contact_read_us=%lu acquisition_us=%lu lifetime_poll_max_us=%lu\n",
             captured_samples_, sample.finger_count,
             stage_ == Stage::OneFinger ? "1" : stage_ == Stage::TwoFinger ? "2"
                                                                           : "3_with_contact",
             matches ? "yes" : "no",
             static_cast<unsigned long>(timing.last_service_us),
             static_cast<unsigned long>(timing.last_compact_read_us),
-            static_cast<unsigned long>(timing.last_contact_read_us));
+            static_cast<unsigned long>(timing.last_contact_read_us),
+            static_cast<unsigned long>(timing.last_acquisition_us),
+            static_cast<unsigned long>(timing.max_poll_us));
         if (diagnostic_contact_sample != nullptr) {
             printf("diagnostic_contact_read=%s diagnostic_contact_read_us=%lu\n",
                 diagnostic_contact_sample->contact_details_available ? "ok" : "fail",
@@ -130,22 +132,24 @@ void Tps43TimingCapture::finish_report_stage(uint64_t now_us, const Tps43Service
     start_concurrent_capture(now_us, timing);
 }
 
-void Tps43TimingCapture::poll_serial() {
-    if (stage_ == Stage::Concurrent || stage_ == Stage::Complete) {
-        while (getchar_timeout_us(0) >= 0) {
-        }
-        return;
-    }
+bool Tps43TimingCapture::diagnostic_contact_requested() const {
+    return stage_ == Stage::Contact && armed_;
+}
 
+void Tps43TimingCapture::poll_serial() {
+    tps43_normal_capture_poll(time_us_64());
     bool enter_received = false;
     int character;
-    while ((character = getchar_timeout_us(0)) >= 0) {
-        if (character == '\r' || character == '\n') {
+    // Bound input processing even if the host continuously writes CDC data.
+    for (unsigned n = 0; n < 32 && (character = getchar_timeout_us(0)) >= 0; ++n) {
+        if ((character == 'm' || character == 'M') && !armed_ && stage_ != Stage::Concurrent) {
+            tps43_normal_capture_start(time_us_64());
+        } else if (character == '\r' || character == '\n') {
             enter_received = true;
         }
     }
-
-    if (enter_received && !armed_) {
+    if (enter_received && !armed_ && !tps43_normal_capture_busy() &&
+        stage_ != Stage::Concurrent && stage_ != Stage::Complete) {
         armed_ = true;
         captured_samples_ = 0;
         stage_mismatches_ = 0;
@@ -193,7 +197,7 @@ void Tps43TimingCapture::finish_concurrent_capture(uint64_t now_us, const Tps43S
     printf(
         "concurrent_elapsed_us=%lu host_service_calls=%lu host_total_us=%lu host_max_us=%lu "
         "device_service_calls=%lu device_total_us=%lu device_max_us=%lu cursor_service_calls=%lu "
-        "cursor_nonzero_actions=%lu max_tps43_service_us=%lu transfer_failures=%lu\n",
+        "cursor_nonzero_actions=%lu max_tps43_publish_us=%lu transfer_failures=%lu\n",
         static_cast<unsigned long>(elapsed_us), static_cast<unsigned long>(host_calls),
         static_cast<unsigned long>(host_total_us), static_cast<unsigned long>(end_counters.usb_host_service_max_us),
         static_cast<unsigned long>(device_calls), static_cast<unsigned long>(device_total_us),

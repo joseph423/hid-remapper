@@ -78,7 +78,9 @@ uint16_t prev_adc_state[NADCS] = { 0 };
 void print_stats_maybe() {
     uint64_t now = time_us_64();
     if (now > next_print) {
-        print_stats();
+        if (!tps43_normal_capture_busy()) {
+            print_stats();
+        }
         while (next_print < now) {
             next_print += 1000000;
         }
@@ -95,9 +97,9 @@ bool do_send_report(uint8_t interface, const uint8_t* report_with_id, uint8_t le
         our_descriptor->should_cause_wakeup(report_with_id[0], report_with_id + 1, len - 1)) {
         tud_remote_wakeup();
     } else {
-        tud_hid_n_report(interface, report_with_id[0], report_with_id + 1, len - 1);
+        return tud_hid_n_report(interface, report_with_id[0], report_with_id + 1, len - 1);
     }
-    return true;  // XXX?
+    return false;  // Remote wakeup is not a submitted HID report.
 }
 
 void gpio_pins_init() {
@@ -285,6 +287,7 @@ int main() {
     next_print = time_us_64() + 1000000;
 
     while (true) {
+        right_tps43_driver.poll();
         bool tick;
         bool new_report;
         read_report(&new_report, &tick);
@@ -305,19 +308,16 @@ int main() {
 #endif
             const uint64_t tick_now_us = time_us_64();
             if (tps43_timing_capture.read_requested()) {
-                right_tps43_driver.request_forced_read();
+                right_tps43_driver.request_forced_read(tps43_timing_capture.diagnostic_contact_requested());
             }
             tps43_coordinator.service(tick_now_us);
-            Tps43Sample diagnostic_contact_sample;
-            const Tps43Sample* diagnostic_contact_sample_ptr = nullptr;
-            if (tps43_timing_capture.wants_diagnostic_contact(
-                    right_tps43_driver.sample(), right_tps43_driver.timing())) {
-                right_tps43_driver.read_contact_report_for_diagnostic(diagnostic_contact_sample);
-                diagnostic_contact_sample_ptr = &diagnostic_contact_sample;
-            }
-            tps43_timing_capture.record(
-                tick_now_us, right_tps43_driver.sample(), right_tps43_driver.timing(),
-                diagnostic_contact_sample_ptr);
+            const Tps43Sample sample = right_tps43_driver.sample();
+            const Tps43ServiceTiming& timing = right_tps43_driver.timing();
+            tps43_normal_capture_note_sample(tick_now_us, sample, timing.last_sample_published,
+                timing.transfer_failures, timing.transfer_timeouts, timing.max_poll_us,
+                timing.last_acquisition_us);
+            tps43_timing_capture.record(tick_now_us, sample, timing,
+                tps43_timing_capture.wants_diagnostic_contact(sample, timing) ? &sample : nullptr);
             process_mapping(true);
             write_gpio();
 #ifdef MCP4651_ENABLED

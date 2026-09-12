@@ -25,6 +25,9 @@ class Tps43TimingCapture final {
     // Requests a raw contact read only for an armed three-finger mismatch.
     bool wants_diagnostic_contact(const Tps43Sample& sample, const Tps43ServiceTiming& timing) const;
 
+    // Returns whether the armed legacy contact stage needs mismatch details.
+    bool diagnostic_contact_requested() const;
+
     // Consumes a non-blocking serial Enter and starts the next report window.
     void poll_serial();
 
