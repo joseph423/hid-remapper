@@ -34,7 +34,6 @@
 #include "tps43_iqs5xx_driver.h"
 #include "tps43_timing_capture.h"
 #include "tps43_timing_metrics.h"
-#include "tps43_timing_processor.h"
 
 // RP2350 UF2s wipe the last sector of flash every time
 // because of RP2350-E10 errata mitigation. So we put
@@ -49,9 +48,31 @@
 
 #define ADC_USAGE_PAGE 0xFFF80000
 
+namespace {
+
+// Phase 10's clean behavior-validation profile. It keeps the approved gesture
+// thresholds but removes velocity-dependent feel and post-release scroll
+// momentum so physical FSM validation observes only the active input path.
+DualTps43Tuning phase10_provisional_tuning() {
+    DualTps43Tuning tuning;
+    tuning.tap_max_duration_us = 200000;
+    // Keep stationary intent below the tap limit so the specified
+    // stationary-release cases can also report an eligible tap.
+    tuning.stationary_intent_threshold_us = 100000;
+    tuning.neutral_activation_threshold = 20;
+    // Fixed gains keep output magnitude deterministic while preserving usable
+    // cursor and scroll output for the physical behavior matrix.
+    tuning.cursor_gain = { 128, 128, 4000, 256, 15000 };
+    tuning.scroll_gain = { 4, 4, 4000, 256, 15000 };
+    tuning.scroll_momentum = { 0, 0, 0, 0 };
+    return tuning;
+}
+
+}  // namespace
+
 Tps43Iqs5xxDriver right_tps43_driver({ i2c0, 0x74, 4, 5, 8, 400000 });
 Tps43Iqs5xxDriver left_tps43_driver({ i2c1, 0x74, 6, 7, 9, 400000 });
-Tps43OnePadBringupProcessor tps43_processor;
+DualTps43Fsm tps43_processor(phase10_provisional_tuning());
 Tps43RemapperActionSink tps43_action_sink;
 DualTps43Coordinator tps43_coordinator(
     left_tps43_driver,
@@ -89,7 +110,7 @@ void print_stats_maybe() {
             print_stats();
             const Tps43ServiceTiming& left_timing = left_tps43_driver.timing();
             const Tps43ServiceTiming& right_timing = right_tps43_driver.timing();
-            printf("TPS43 dual left_samples=%lu left_movement=%lu left_failures=%lu left_timeouts=%lu right_samples=%lu right_movement=%lu right_failures=%lu right_timeouts=%lu\n", static_cast<unsigned long>(left_tps43_stats.published_samples), static_cast<unsigned long>(left_tps43_stats.movement_samples), static_cast<unsigned long>(left_timing.transfer_failures), static_cast<unsigned long>(left_timing.transfer_timeouts), static_cast<unsigned long>(right_tps43_stats.published_samples), static_cast<unsigned long>(right_tps43_stats.movement_samples), static_cast<unsigned long>(right_timing.transfer_failures), static_cast<unsigned long>(right_timing.transfer_timeouts));
+            printf("TPS43 dual left_samples=%lu left_movement=%lu left_failures=%lu left_timeouts=%lu right_samples=%lu right_movement=%lu right_failures=%lu right_timeouts=%lu resolution_multiplier=0x%02x\n", static_cast<unsigned long>(left_tps43_stats.published_samples), static_cast<unsigned long>(left_tps43_stats.movement_samples), static_cast<unsigned long>(left_timing.transfer_failures), static_cast<unsigned long>(left_timing.transfer_timeouts), static_cast<unsigned long>(right_tps43_stats.published_samples), static_cast<unsigned long>(right_tps43_stats.movement_samples), static_cast<unsigned long>(right_timing.transfer_failures), static_cast<unsigned long>(right_timing.transfer_timeouts), resolution_multiplier);
         }
         while (next_print < now) {
             next_print += 1000000;
@@ -338,6 +359,7 @@ int main() {
                 ++right_tps43_stats.published_samples;
                 right_tps43_stats.movement_samples += right_sample.movement_reported;
             }
+            tps43_timing_capture.record_dual_input(tick_now_us, left_sample, left_timing, right_sample, right_timing);
             tps43_normal_capture_note_sample(tick_now_us, right_sample, right_timing.last_sample_published, right_timing.transfer_failures, right_timing.transfer_timeouts, right_timing.max_poll_us, right_timing.last_acquisition_us);
             tps43_timing_capture.record(tick_now_us, right_sample, right_timing, tps43_timing_capture.wants_diagnostic_contact(right_sample, right_timing) ? &right_sample : nullptr);
             process_mapping(true);

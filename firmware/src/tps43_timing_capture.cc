@@ -10,6 +10,11 @@ namespace {
 constexpr size_t kCompactSamples = 20;
 constexpr size_t kContactSamples = 20;
 constexpr uint64_t kConcurrentDurationUs = 60 * 1000000ULL;
+constexpr uint64_t kManualDebugIntervalUs = 100000;
+
+uint32_t absolute_delta(int32_t value) {
+    return static_cast<uint32_t>(value < 0 ? -static_cast<int64_t>(value) : value);
+}
 
 void print_contact_slots(const Tps43Sample& sample) {
     for (size_t slot = 0; slot < sample.contacts.size(); ++slot) {
@@ -24,6 +29,7 @@ void print_contact_slots(const Tps43Sample& sample) {
 
 void Tps43TimingCapture::begin() {
     printf("TPS43 async runtime timing capture; M = 15-second normal-use capture (no forced reads)\n");
+    printf("D = toggle 10 Hz dual-pad compact-sample debug (cached samples; no extra sensor reads)\n");
     printf("STAGE: one-finger compact report samples=%zu\n", kCompactSamples);
     print_sample_prompt();
 }
@@ -88,6 +94,87 @@ void Tps43TimingCapture::record(
     }
 }
 
+void Tps43TimingCapture::record_dual_input(
+    uint64_t now_us,
+    const Tps43Sample& left_sample,
+    const Tps43ServiceTiming& left_timing,
+    const Tps43Sample& right_sample,
+    const Tps43ServiceTiming& right_timing) {
+    record_input("left", left_sample, left_timing, left_input_session_);
+    record_input("right", right_sample, right_timing, right_input_session_);
+
+    if (!manual_debug_enabled_ || now_us - last_manual_debug_us_ < kManualDebugIntervalUs ||
+        (!left_timing.last_sample_published && !right_timing.last_sample_published)) {
+        return;
+    }
+    last_manual_debug_us_ = now_us;
+    printf(
+        "TPS43 debug timestamp_us=%lu left_fresh=%s left_active=%s left_fingers=%u left_dx=%ld left_dy=%ld "
+        "left_move=%s left_single_tap=%s left_two_finger_tap=%s left_scroll=%s left_failures=%lu left_timeouts=%lu "
+        "right_fresh=%s right_active=%s right_fingers=%u right_dx=%ld right_dy=%ld right_move=%s "
+        "right_single_tap=%s right_two_finger_tap=%s right_scroll=%s right_failures=%lu right_timeouts=%lu\n",
+        static_cast<unsigned long>(now_us), left_timing.last_sample_published ? "yes" : "no",
+        left_sample.active ? "yes" : "no", left_sample.finger_count, static_cast<long>(left_sample.relative_x),
+        static_cast<long>(left_sample.relative_y), left_sample.movement_reported ? "yes" : "no",
+        left_sample.single_tap ? "yes" : "no", left_sample.two_finger_tap ? "yes" : "no",
+        left_sample.scroll_gesture ? "yes" : "no", static_cast<unsigned long>(left_timing.transfer_failures),
+        static_cast<unsigned long>(left_timing.transfer_timeouts), right_timing.last_sample_published ? "yes" : "no",
+        right_sample.active ? "yes" : "no", right_sample.finger_count, static_cast<long>(right_sample.relative_x),
+        static_cast<long>(right_sample.relative_y), right_sample.movement_reported ? "yes" : "no",
+        right_sample.single_tap ? "yes" : "no", right_sample.two_finger_tap ? "yes" : "no",
+        right_sample.scroll_gesture ? "yes" : "no", static_cast<unsigned long>(right_timing.transfer_failures),
+        static_cast<unsigned long>(right_timing.transfer_timeouts));
+}
+
+bool Tps43TimingCapture::manual_debug_enabled() const {
+    return manual_debug_enabled_;
+}
+
+void Tps43TimingCapture::record_input(
+    const char* pad_name,
+    const Tps43Sample& sample,
+    const Tps43ServiceTiming& timing,
+    InputSession& session) {
+    if (!timing.last_sample_published) {
+        return;
+    }
+
+    if (sample.active && !session.active) {
+        session = {};
+        session.active = true;
+        session.started_us = sample.timestamp_us;
+        printf("TPS43 input pad=%s event=touch_start timestamp_us=%lu fingers=%u\n",
+            pad_name, static_cast<unsigned long>(sample.timestamp_us), sample.finger_count);
+    }
+
+    if (sample.active && session.active) {
+        ++session.fresh_samples;
+        session.relative_x += sample.relative_x;
+        session.relative_y += sample.relative_y;
+        if (sample.movement_reported) {
+            ++session.movement_samples;
+        }
+        session.maximum_delta = std::max(session.maximum_delta,
+            std::max(absolute_delta(sample.relative_x), absolute_delta(sample.relative_y)));
+    }
+
+    if (!sample.active && session.active) {
+        const uint64_t duration_us = sample.timestamp_us >= session.started_us
+                                         ? sample.timestamp_us - session.started_us
+                                         : 0;
+        printf(
+            "TPS43 input pad=%s event=touch_end duration_us=%lu fresh_samples=%lu "
+            "movement_samples=%lu net_dx=%ld net_dy=%ld max_delta=%lu single_tap=%s two_finger_tap=%s\n",
+            pad_name, static_cast<unsigned long>(duration_us),
+            static_cast<unsigned long>(session.fresh_samples),
+            static_cast<unsigned long>(session.movement_samples),
+            static_cast<long>(session.relative_x), static_cast<long>(session.relative_y),
+            static_cast<unsigned long>(session.maximum_delta), sample.single_tap ? "yes" : "no",
+            sample.two_finger_tap ? "yes" : "no");
+        session = {};
+    }
+}
+
 bool Tps43TimingCapture::wants_diagnostic_contact(
     const Tps43Sample& sample,
     const Tps43ServiceTiming& timing) const {
@@ -142,7 +229,12 @@ void Tps43TimingCapture::poll_serial() {
     int character;
     // Bound input processing even if the host continuously writes CDC data.
     for (unsigned n = 0; n < 32 && (character = getchar_timeout_us(0)) >= 0; ++n) {
-        if ((character == 'm' || character == 'M') && !armed_ && stage_ != Stage::Concurrent) {
+        if (character == 'd' || character == 'D') {
+            manual_debug_enabled_ = !manual_debug_enabled_;
+            last_manual_debug_us_ = 0;
+            printf("manual_debug=%s interval_ms=100 source=cached_compact_samples\n",
+                manual_debug_enabled_ ? "on" : "off");
+        } else if ((character == 'm' || character == 'M') && !armed_ && stage_ != Stage::Concurrent) {
             tps43_normal_capture_start(time_us_64());
         } else if (character == '\r' || character == '\n') {
             enter_received = true;
