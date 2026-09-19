@@ -50,7 +50,7 @@
 #define ADC_USAGE_PAGE 0xFFF80000
 
 Tps43Iqs5xxDriver right_tps43_driver({ i2c0, 0x74, 4, 5, 8, 400000 });
-Tps43InactiveDriver left_tps43_driver;
+Tps43Iqs5xxDriver left_tps43_driver({ i2c1, 0x74, 6, 7, 9, 400000 });
 Tps43OnePadBringupProcessor tps43_processor;
 Tps43RemapperActionSink tps43_action_sink;
 DualTps43Coordinator tps43_coordinator(
@@ -60,6 +60,13 @@ DualTps43Coordinator tps43_coordinator(
     tps43_action_sink);
 Tps43TimingCapture tps43_timing_capture;
 
+struct Tps43PadRuntimeStats {
+    uint32_t published_samples = 0;
+    uint32_t movement_samples = 0;
+};
+
+Tps43PadRuntimeStats left_tps43_stats;
+Tps43PadRuntimeStats right_tps43_stats;
 uint64_t next_print = 0;
 
 mutex_t mutexes[(uint8_t) MutexId::N];
@@ -80,6 +87,9 @@ void print_stats_maybe() {
     if (now > next_print) {
         if (!tps43_normal_capture_busy()) {
             print_stats();
+            const Tps43ServiceTiming& left_timing = left_tps43_driver.timing();
+            const Tps43ServiceTiming& right_timing = right_tps43_driver.timing();
+            printf("TPS43 dual left_samples=%lu left_movement=%lu left_failures=%lu left_timeouts=%lu right_samples=%lu right_movement=%lu right_failures=%lu right_timeouts=%lu\n", static_cast<unsigned long>(left_tps43_stats.published_samples), static_cast<unsigned long>(left_tps43_stats.movement_samples), static_cast<unsigned long>(left_timing.transfer_failures), static_cast<unsigned long>(left_timing.transfer_timeouts), static_cast<unsigned long>(right_tps43_stats.published_samples), static_cast<unsigned long>(right_tps43_stats.movement_samples), static_cast<unsigned long>(right_timing.transfer_failures), static_cast<unsigned long>(right_timing.transfer_timeouts));
         }
         while (next_print < now) {
             next_print += 1000000;
@@ -280,6 +290,10 @@ int main() {
     if (!right_tps43_driver.initialize()) {
         printf("TPS43 Right-pad runtime initialization failed\n");
     }
+    if (!left_tps43_driver.initialize()) {
+        printf("TPS43 Left-pad runtime initialization failed\n");
+    }
+
     tps43_timing_capture.begin();
 
     tud_sof_isr_set(sof_handler);
@@ -288,6 +302,7 @@ int main() {
 
     while (true) {
         right_tps43_driver.poll();
+        left_tps43_driver.poll();
         bool tick;
         bool new_report;
         read_report(&new_report, &tick);
@@ -311,13 +326,20 @@ int main() {
                 right_tps43_driver.request_forced_read(tps43_timing_capture.diagnostic_contact_requested());
             }
             tps43_coordinator.service(tick_now_us);
-            const Tps43Sample sample = right_tps43_driver.sample();
-            const Tps43ServiceTiming& timing = right_tps43_driver.timing();
-            tps43_normal_capture_note_sample(tick_now_us, sample, timing.last_sample_published,
-                timing.transfer_failures, timing.transfer_timeouts, timing.max_poll_us,
-                timing.last_acquisition_us);
-            tps43_timing_capture.record(tick_now_us, sample, timing,
-                tps43_timing_capture.wants_diagnostic_contact(sample, timing) ? &sample : nullptr);
+            const Tps43Sample left_sample = left_tps43_driver.sample();
+            const Tps43ServiceTiming& left_timing = left_tps43_driver.timing();
+            const Tps43Sample right_sample = right_tps43_driver.sample();
+            const Tps43ServiceTiming& right_timing = right_tps43_driver.timing();
+            if (left_timing.last_sample_published) {
+                ++left_tps43_stats.published_samples;
+                left_tps43_stats.movement_samples += left_sample.movement_reported;
+            }
+            if (right_timing.last_sample_published) {
+                ++right_tps43_stats.published_samples;
+                right_tps43_stats.movement_samples += right_sample.movement_reported;
+            }
+            tps43_normal_capture_note_sample(tick_now_us, right_sample, right_timing.last_sample_published, right_timing.transfer_failures, right_timing.transfer_timeouts, right_timing.max_poll_us, right_timing.last_acquisition_us);
+            tps43_timing_capture.record(tick_now_us, right_sample, right_timing, tps43_timing_capture.wants_diagnostic_contact(right_sample, right_timing) ? &right_sample : nullptr);
             process_mapping(true);
             write_gpio();
 #ifdef MCP4651_ENABLED

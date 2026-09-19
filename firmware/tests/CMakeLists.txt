@@ -58,12 +58,27 @@ target_include_directories(tps43_async_driver_test PRIVATE fake_pico ../src)
 add_test(NAME tps43_async_driver_test COMMAND tps43_async_driver_test)
 set_tests_properties(tps43_async_driver_test PROPERTIES TIMEOUT 5)
 
+add_executable(tps43_dual_driver_test
+    tps43_dual_driver_test.cc
+    ../src/dual_tps43_coordinator.cc
+    ../src/pad_state.cc
+    ../src/tps43_iqs5xx_driver.cc
+)
+target_compile_features(tps43_dual_driver_test PRIVATE cxx_std_17)
+target_compile_options(tps43_dual_driver_test PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(tps43_dual_driver_test PRIVATE TPS43_CUSTOM_FAKE_GPIO_GET=1)
+target_include_directories(tps43_dual_driver_test PRIVATE fake_pico ../src)
+add_test(NAME tps43_dual_driver_test COMMAND tps43_dual_driver_test)
+set_tests_properties(tps43_dual_driver_test PROPERTIES TIMEOUT 5)
+
 add_executable(tps43_normal_capture_test
     tps43_normal_capture_test.cc
     ../src/tps43_timing_metrics.cc
 )
 target_compile_features(tps43_normal_capture_test PRIVATE cxx_std_17)
 target_compile_options(tps43_normal_capture_test PRIVATE -Wall -Wextra -Werror)
+# Preserve the full diagnostic trace fixture without increasing production RAM.
+target_compile_definitions(tps43_normal_capture_test PRIVATE TPS43_NORMAL_CAPTURE_TRACE_CAPACITY=512)
 target_include_directories(tps43_normal_capture_test PRIVATE ../src)
 add_test(NAME tps43_normal_capture_test COMMAND tps43_normal_capture_test)
 
@@ -74,5 +89,7 @@ add_executable(tps43_capture_commands_test
 )
 target_compile_features(tps43_capture_commands_test PRIVATE cxx_std_17)
 target_compile_options(tps43_capture_commands_test PRIVATE -Wall -Wextra -Werror)
+# Capture-command tests exercise the full diagnostic trace behavior.
+target_compile_definitions(tps43_capture_commands_test PRIVATE TPS43_NORMAL_CAPTURE_TRACE_CAPACITY=512)
 target_include_directories(tps43_capture_commands_test PRIVATE fake_pico ../src)
 add_test(NAME tps43_capture_commands_test COMMAND tps43_capture_commands_test)

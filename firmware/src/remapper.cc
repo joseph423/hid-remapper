@@ -8,6 +8,7 @@
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "config.h"
@@ -438,7 +439,7 @@ void set_mapping_from_config() {
         }
 
         if (assign_state_slot(mapping.source_usage, source_port, false)) {
-            reverse_mapping_map[((uint64_t) target_port << 32) | mapping.target_usage].push_back((map_source_t){
+            reverse_mapping_map[((uint64_t) target_port << 32) | mapping.target_usage].push_back((map_source_t) {
                 .usage = mapping.source_usage,
                 .scaling = mapping.scaling,
                 .sticky = (mapping.flags & MAPPING_FLAG_STICKY) != 0,
@@ -452,7 +453,7 @@ void set_mapping_from_config() {
             });
 
             if ((mapping.source_usage & 0xFFFF0000) == REGISTER_USAGE_PAGE) {
-                register_ptrs.push_back((register_ptrs_t){
+                register_ptrs.push_back((register_ptrs_t) {
                     .register_ptr = &registers[(mapping.source_usage & 0xFFFF) - 1],
                     .state_ptr = get_state_ptr(mapping.source_usage, source_port),
                 });
@@ -515,7 +516,7 @@ void set_mapping_from_config() {
         uint8_t hub_port = hub_port_usage >> 32;
         int32_t* state_ptr = get_state_ptr(usage, hub_port);
         if (state_ptr != NULL) {
-            sticky_usages.push_back((sticky_usage_t){
+            sticky_usages.push_back((sticky_usage_t) {
                 .input_state = state_ptr,
                 .sticky_state = get_sticky_state_ptr(usage, hub_port),
                 .layer_mask = layer_mask,
@@ -527,7 +528,7 @@ void set_mapping_from_config() {
         uint32_t usage = hub_port_usage & 0xFFFFFFFF;
         uint8_t hub_port = hub_port_usage >> 32;
         if (get_state_ptr(usage, hub_port) != NULL) {
-            tap_sticky_usages.push_back((tap_hold_sticky_usage_t){
+            tap_sticky_usages.push_back((tap_hold_sticky_usage_t) {
                 .layer_mask = layer_mask,
                 .tap_hold_state = get_tap_hold_state_ptr(usage, hub_port),
                 .sticky_state = get_sticky_state_ptr(usage, hub_port),
@@ -539,7 +540,7 @@ void set_mapping_from_config() {
         uint32_t usage = hub_port_usage & 0xFFFFFFFF;
         uint8_t hub_port = hub_port_usage >> 32;
         if (get_state_ptr(usage, hub_port) != NULL) {
-            hold_sticky_usages.push_back((tap_hold_sticky_usage_t){
+            hold_sticky_usages.push_back((tap_hold_sticky_usage_t) {
                 .layer_mask = layer_mask,
                 .tap_hold_state = get_tap_hold_state_ptr(usage, hub_port),
                 .sticky_state = get_sticky_state_ptr(usage, hub_port),
@@ -552,7 +553,7 @@ void set_mapping_from_config() {
         uint8_t hub_port = hub_port_usage >> 32;
         int32_t* state_ptr = get_state_ptr(usage, hub_port);
         if (state_ptr != NULL) {
-            tap_hold_usages.push_back((tap_hold_usage_t){
+            tap_hold_usages.push_back((tap_hold_usage_t) {
                 .input_state = state_ptr,
                 .tap_hold_state = get_tap_hold_state_ptr(usage, hub_port),
             });
@@ -564,7 +565,7 @@ void set_mapping_from_config() {
             uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_on_layers[usage];
             if (unmapped_layers) {
                 if (assign_state_slot(usage, 0, false)) {
-                    reverse_mapping_map[usage].push_back((map_source_t){
+                    reverse_mapping_map[usage].push_back((map_source_t) {
                         .usage = usage,
                         .layer_mask = unmapped_layers,
                         .input_state = get_state_ptr(usage, 0),
@@ -578,7 +579,7 @@ void set_mapping_from_config() {
                 uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_on_layers[usage];
                 if (unmapped_layers) {
                     if (assign_state_slot(usage, 0, false)) {
-                        reverse_mapping_map[usage].push_back((map_source_t){
+                        reverse_mapping_map[usage].push_back((map_source_t) {
                             .usage = usage,
                             .layer_mask = unmapped_layers,
                             .input_state = get_state_ptr(usage, 0),
@@ -593,7 +594,7 @@ void set_mapping_from_config() {
                 uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_on_layers[usage];
                 if (unmapped_layers) {
                     if (assign_state_slot(usage, 0, false)) {
-                        reverse_mapping_map[usage].push_back((map_source_t){
+                        reverse_mapping_map[usage].push_back((map_source_t) {
                             .usage = usage,
                             .layer_mask = unmapped_layers,
                             .input_state = get_state_ptr(usage, 0),
@@ -604,20 +605,30 @@ void set_mapping_from_config() {
         }
     }
 
-    for (auto const& [hub_port_target, sources] : reverse_mapping_map) {
+    while (!reverse_mapping_map.empty()) {
+        // Remove the temporary lookup node before the final table grows. This
+        // keeps its node allocation out of the peak heap requirement for large
+        // valid passthrough configurations.
+        auto node = reverse_mapping_map.extract(reverse_mapping_map.begin());
+        uint64_t hub_port_target = node.key();
+        auto& sources = node.mapped();
         uint8_t hub_port = (hub_port_target >> 32) & 0xFF;
         uint32_t target = hub_port_target & 0xFFFFFFFF;
         reverse_mapping_t rev_map = {
             .target = target,
             .hub_port = hub_port,
-            .sources = sources,
+            // Mapping construction expands passthrough sources before it knows
+            // their final target. Keep the handoff below move-only: copying
+            // either this vector or rev_map creates another full allocation
+            // and can prevent USB startup for valid large configurations.
+            .sources = std::move(sources),
         };
         if (our_descriptor->default_value != nullptr) {
             rev_map.default_value = our_descriptor->default_value(target);
             // This helps in cases where nothing is plugged in to provide state for a source
             // and a default of zero is not good, but the proper way to solve this would be
             // to not execute mappings with unplugged sources.
-            for (auto const& source : sources) {
+            for (auto const& source : rev_map.sources) {
                 if (!source.sticky && !source.tap && !source.hold && (source.scaling == 1000)) {
                     *(source.input_state) = rev_map.default_value;
                 }
@@ -628,35 +639,35 @@ void set_mapping_from_config() {
             (target == (DIGIPOT_USAGE_PAGE | 2)) ||
             (target == (DIGIPOT_USAGE_PAGE | 3))) {
             rev_map.default_value = 128;
-            for (auto const& source : sources) {
+            for (auto const& source : rev_map.sources) {
                 if (!source.sticky && !source.tap && !source.hold && (source.scaling == 1000)) {
                     *(source.input_state) = 128;
                 }
             }
         }
         if ((target & 0xFFFF0000) == GPIO_USAGE_PAGE) {
-            rev_map.our_usages.push_back((out_usage_def_t){
+            rev_map.our_usages.push_back((out_usage_def_t) {
                 .data = gpio_out_state,
                 .len = sizeof(gpio_out_state),
                 .size = 1,
                 .bitpos = (uint16_t) (target & 0xFFFF),
             });
         } else if ((target & 0xFFFF0000) == DIGIPOT_USAGE_PAGE) {
-            rev_map.our_usages.push_back((out_usage_def_t){
+            rev_map.our_usages.push_back((out_usage_def_t) {
                 .data = (uint8_t*) digipot_state,
                 .len = sizeof(digipot_state),
                 .size = 9,
                 .bitpos = (uint16_t) ((target & 0xFFFF) * 16),
             });
         } else if ((target & 0xFFFF0000) == DPAD_USAGE_PAGE) {
-            rev_map.our_usages.push_back((out_usage_def_t){
+            rev_map.our_usages.push_back((out_usage_def_t) {
                 .data = &dpad_state,
                 .len = sizeof(dpad_state),
                 .size = 1,
                 .bitpos = (uint16_t) ((target & 0xFFFF) - 1) & 0x03,
             });
         } else if ((target & 0xFFFF0000) == REGISTER_USAGE_PAGE) {
-            rev_map.our_usages.push_back((out_usage_def_t){
+            rev_map.our_usages.push_back((out_usage_def_t) {
                 .data = (uint8_t*) registers,
                 .len = sizeof(registers),
                 .size = 8 * sizeof(registers[0]),
@@ -666,7 +677,7 @@ void set_mapping_from_config() {
             bool handled = false;
             for (auto const& array_usage : our_array_range_usages) {
                 if ((target >= array_usage.usage) && (target <= array_usage.usage_def.usage_maximum)) {
-                    rev_map.our_usages.push_back((out_usage_def_t){
+                    rev_map.our_usages.push_back((out_usage_def_t) {
                         .data = reports[array_usage.usage_def.report_id],
                         .len = report_sizes[array_usage.usage_def.report_id],
                         .size = array_usage.usage_def.size,
@@ -682,7 +693,7 @@ void set_mapping_from_config() {
                 auto search = our_usages_flat.find(target);
                 if (search != our_usages_flat.end()) {
                     const usage_def_t& our_usage = search->second;
-                    rev_map.our_usages.push_back((out_usage_def_t){
+                    rev_map.our_usages.push_back((out_usage_def_t) {
                         .data = reports[our_usage.report_id],
                         .len = report_sizes[our_usage.report_id],
                         .size = our_usage.size,
@@ -693,11 +704,11 @@ void set_mapping_from_config() {
             }
         }
         if ((target & 0xFFFF0000) == MACRO_USAGE_PAGE) {
-            reverse_mapping_macros.push_back(rev_map);
+            reverse_mapping_macros.push_back(std::move(rev_map));
         } else if ((target & 0xFFFF0000) == LAYERS_USAGE_PAGE) {
-            reverse_mapping_layers.push_back(rev_map);
+            reverse_mapping_layers.push_back(std::move(rev_map));
         } else {
-            reverse_mapping.push_back(rev_map);
+            reverse_mapping.push_back(std::move(rev_map));
         }
     }
 
@@ -1196,7 +1207,7 @@ void process_mapping(bool auto_repeat) {
                     (map_source.tap && map_source.tap_hold_state->tap))) {
                 my_mutex_enter(MutexId::MACROS);
                 for (auto const& usages : macros[macro]) {
-                    macro_queue.push((macro_entry_t){ duration_left : macro_entry_duration, items : usages });
+                    macro_queue.push((macro_entry_t) { duration_left : macro_entry_duration, items : usages });
                 }
                 my_mutex_exit(MutexId::MACROS);
             }
@@ -1454,22 +1465,19 @@ bool send_report(send_report_t do_send_report) {
     if (x_usage != our_usages_flat.end() && x_usage->second.report_id == report_id) {
         const auto axis = [&](uint32_t usage) -> int32_t {
             const auto it = our_usages_flat.find(usage);
-            if (it == our_usages_flat.end() || it->second.report_id != report_id) {
+            if (it == our_usages_flat.end() || it->second.report_id != report_id)
                 return 0;
-            }
             const auto& def = it->second;
             uint32_t value = get_bits(outgoing_reports[or_head] + 1, report_sizes[report_id], def.bitpos, def.size);
-            if (def.size > 0 && def.size < 32 && (value & (1u << (def.size - 1)))) {
+            if (def.size > 0 && def.size < 32 && (value & (1u << (def.size - 1))))
                 value |= UINT32_MAX << def.size;
-            }
             return static_cast<int32_t>(value);
         };
         tps43_normal_capture_note_usb(submission_timestamp_us, sent, axis(0x00010030), axis(0x00010031));
     }
     // A rejected submission must retain movement and button edges for retry.
-    if (!sent && our_descriptor == &our_descriptors[our_descriptor_number]) {
+    if (!sent && our_descriptor == &our_descriptors[our_descriptor_number])
         return false;
-    }
 
     or_head = (or_head + 1) % OR_BUFSIZE;
     or_items--;
@@ -1910,7 +1918,7 @@ void update_their_descriptor_derivates() {
                     if ((state_ptr_0 != NULL) || (state_ptr_n != NULL)) {
                         usage_def.input_state_0 = state_ptr_0;
                         usage_def.input_state_n = state_ptr_n;
-                        their_used_usages[interface][report_id].push_back((usage_usage_def_t){
+                        their_used_usages[interface][report_id].push_back((usage_usage_def_t) {
                             .usage = usage,
                             .usage_def = usage_def,
                         });
@@ -1919,7 +1927,7 @@ void update_their_descriptor_derivates() {
                         usage_def.input_state_0 = state_ptr_raw_0;
                         usage_def.input_state_n = state_ptr_raw_n;
                         usage_def.should_be_scaled = false;
-                        their_used_usages[interface][report_id].push_back((usage_usage_def_t){
+                        their_used_usages[interface][report_id].push_back((usage_usage_def_t) {
                             .usage = usage,
                             .usage_def = usage_def,
                         });
@@ -1944,7 +1952,7 @@ void update_their_descriptor_derivates() {
                             binary_usage_set.insert(state_ptr_n);
                         }
                         if (actual_usage == ROLLOVER_USAGE) {
-                            rollover_usages[interface][report_id].push_back((usage_def_t){
+                            rollover_usages[interface][report_id].push_back((usage_def_t) {
                                 .size = usage_def.size,
                                 .bitpos = usage_def.bitpos,
                                 .is_array = true,
@@ -1954,7 +1962,7 @@ void update_their_descriptor_derivates() {
                         }
                     }
                     if (any_used) {
-                        their_used_usages[interface][report_id].push_back((usage_usage_def_t){
+                        their_used_usages[interface][report_id].push_back((usage_usage_def_t) {
                             .usage = usage,
                             .usage_def = usage_def,
                         });
@@ -1986,7 +1994,7 @@ void update_their_descriptor_derivates() {
                 uint8_t hub_port = hub_ports[dev_addr_int_rep_id >> 24];
                 if ((rev_map.hub_port == 0) || (rev_map.hub_port == hub_port)) {
                     auto const& our_usage2 = their_out_usages[dev_addr_int_rep_id >> 16][dev_addr_int_rep_id & 0xFFFF][rev_map.target];
-                    rev_map.our_usages.push_back((out_usage_def_t){
+                    rev_map.our_usages.push_back((out_usage_def_t) {
                         .data = out_reports[dev_addr_int_rep_id],
                         .len = out_report_sizes[dev_addr_int_rep_id],
                         .size = our_usage2.size,
@@ -2065,10 +2073,10 @@ void parse_our_descriptor() {
                 if (usage == DPAD_USAGE) {
                     our_dpad_usage = usage_def;
                     have_dpad = true;
-                    our_usages_flat[DPAD_USAGE_LEFT] = (usage_def_t){};
-                    our_usages_flat[DPAD_USAGE_RIGHT] = (usage_def_t){};
-                    our_usages_flat[DPAD_USAGE_UP] = (usage_def_t){};
-                    our_usages_flat[DPAD_USAGE_DOWN] = (usage_def_t){};
+                    our_usages_flat[DPAD_USAGE_LEFT] = (usage_def_t) {};
+                    our_usages_flat[DPAD_USAGE_RIGHT] = (usage_def_t) {};
+                    our_usages_flat[DPAD_USAGE_UP] = (usage_def_t) {};
+                    our_usages_flat[DPAD_USAGE_DOWN] = (usage_def_t) {};
                 }
                 our_usage_ranges_set.insert(((uint64_t) usage << 32) | (usage_def.usage_maximum ? usage_def.usage_maximum : usage));
 
@@ -2078,7 +2086,7 @@ void parse_our_descriptor() {
                     put_bits(report_masks_absolute[report_id], report_sizes[report_id], usage_def.bitpos, usage_def.size, 0xFFFFFFFF);
                 }
             } else {  // array range
-                our_array_range_usages.push_back((usage_usage_def_t){
+                our_array_range_usages.push_back((usage_usage_def_t) {
                     .usage = usage,
                     .usage_def = usage_def,
                 });

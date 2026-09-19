@@ -3,6 +3,10 @@
 #include <algorithm>
 #include <cstdio>
 
+#ifndef TPS43_NORMAL_CAPTURE_TRACE_CAPACITY
+#define TPS43_NORMAL_CAPTURE_TRACE_CAPACITY 1
+#endif
+
 namespace {
 
 Tps43RuntimeCounters counters;
@@ -39,7 +43,9 @@ void tps43_reset_runtime_counters() {
 namespace {
 
 constexpr uint64_t kNormalDurationUs = 15000000;
-constexpr size_t kTraceCapacity = 512;
+// Keep normal firmware within the USB-host RAM budget. A dedicated timing
+// build may override this at compile time when full per-event traces are needed.
+constexpr size_t kTraceCapacity = TPS43_NORMAL_CAPTURE_TRACE_CAPACITY;
 
 struct IntervalStats {
     uint64_t previous = 0;
@@ -229,7 +235,8 @@ void tps43_normal_capture_poll(uint64_t now_us) {
             static_cast<unsigned long>(normal.delta_bins[3]), static_cast<unsigned long>(normal.delta_bins[4]),
             static_cast<unsigned long>(normal.delta_bins[5]));
     } else if (row == 5) {
-        printf("normal_trace retained_last_per_source=512 sample_overwritten=%lu usb_overwritten=%lu; sample_flags=movement:1,tap:2,two_tap:4,scroll:8 usb_flags=submitted:1\n",
+        printf("normal_trace retained_last_per_source=%lu sample_overwritten=%lu usb_overwritten=%lu; sample_flags=movement:1,tap:2,two_tap:4,scroll:8 usb_flags=submitted:1\n",
+            static_cast<unsigned long>(kTraceCapacity),
             static_cast<unsigned long>(normal.sample_trace.count > kTraceCapacity ? normal.sample_trace.count - kTraceCapacity : 0),
             static_cast<unsigned long>(normal.usb_trace.count > kTraceCapacity ? normal.usb_trace.count - kTraceCapacity : 0));
     } else {
@@ -240,7 +247,8 @@ void tps43_normal_capture_poll(uint64_t now_us) {
         } else if (row - 6 - sample_rows < usb_rows) {
             print_trace_row("usb", normal.usb_trace, row - 6 - sample_rows);
         } else {
-            printf("NORMAL DONE: summaries cover all 15 seconds; traces retain last 512 events per source; M repeats\n");
+            printf("NORMAL DONE: summaries cover all 15 seconds; traces retain last %lu events per source; M repeats\n",
+                static_cast<unsigned long>(kTraceCapacity));
             normal.phase = NormalCapture::Phase::Idle;
         }
     }
