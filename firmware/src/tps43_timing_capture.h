@@ -34,6 +34,9 @@ class Tps43TimingCapture final {
     // Returns whether the opt-in 10 Hz compact-sample debug stream is active.
     bool manual_debug_enabled() const;
 
+    // Returns whether the direct Phase 11 capture is settling or recording.
+    bool phase11_capture_busy() const;
+
     // Requests a raw contact read only for an armed three-finger mismatch.
     bool wants_diagnostic_contact(const Tps43Sample& sample, const Tps43ServiceTiming& timing) const;
 
@@ -52,14 +55,29 @@ class Tps43TimingCapture final {
         OneFinger,
         TwoFinger,
         Contact,
+        ConcurrentSettling,
         Concurrent,
         Complete,
     };
 
     void print_sample_prompt() const;
-    void finish_report_stage(uint64_t now_us, const Tps43ServiceTiming& timing);
-    void start_concurrent_capture(uint64_t now_us, const Tps43ServiceTiming& timing);
-    void finish_concurrent_capture(uint64_t now_us, const Tps43ServiceTiming& timing);
+    void finish_report_stage(uint64_t now_us);
+    void request_concurrent_capture(uint64_t now_us);
+    void start_concurrent_capture(uint64_t now_us, const Tps43ServiceTiming& left_timing, const Tps43ServiceTiming& right_timing);
+    void update_concurrent_capture(uint64_t now_us, const Tps43Sample& left_sample, const Tps43ServiceTiming& left_timing, const Tps43Sample& right_sample, const Tps43ServiceTiming& right_timing);
+    void finish_concurrent_capture(uint64_t now_us, const Tps43ServiceTiming& left_timing, const Tps43ServiceTiming& right_timing);
+
+    struct ConcurrentPadMetrics {
+        uint64_t last_service_us = 0;
+        uint32_t service_max_us = 0;
+        uint32_t service_max_gap_us = 0;
+        uint32_t samples = 0;
+        uint32_t movement_samples = 0;
+        uint32_t start_failures = 0;
+        uint32_t start_timeouts = 0;
+    };
+
+    void update_concurrent_pad(uint64_t now_us, const Tps43Sample& sample, const Tps43ServiceTiming& timing, ConcurrentPadMetrics& metrics);
 
     struct InputSession {
         bool active = false;
@@ -84,9 +102,10 @@ class Tps43TimingCapture final {
     size_t two_finger_mismatches_ = 0;
     size_t contact_mismatches_ = 0;
     bool armed_ = false;
+    uint64_t concurrent_start_at_us_ = 0;
     uint64_t concurrent_started_us_ = 0;
-    uint32_t concurrent_max_service_us_ = 0;
-    uint32_t concurrent_start_failures_ = 0;
+    ConcurrentPadMetrics concurrent_left_;
+    ConcurrentPadMetrics concurrent_right_;
     InputSession left_input_session_;
     InputSession right_input_session_;
     bool manual_debug_enabled_ = false;

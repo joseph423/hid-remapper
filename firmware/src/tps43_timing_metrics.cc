@@ -10,19 +10,39 @@
 namespace {
 
 Tps43RuntimeCounters counters;
+uint64_t last_usb_host_service_us = 0;
+uint64_t last_usb_device_service_us = 0;
+bool runtime_metrics_enabled = false;
+
+void note_service(uint64_t finished_us, uint32_t duration_us, uint64_t& previous_us, uint64_t& calls, uint64_t& total_us, uint32_t& maximum_us, uint32_t& maximum_gap_us) {
+    ++calls;
+    total_us += duration_us;
+    maximum_us = std::max(maximum_us, duration_us);
+    if (previous_us != 0 && finished_us >= previous_us) {
+        const uint64_t gap_us = finished_us - previous_us;
+        maximum_gap_us = std::max(maximum_gap_us, static_cast<uint32_t>(std::min<uint64_t>(gap_us, UINT32_MAX)));
+    }
+    previous_us = finished_us;
+}
 
 }  // namespace
 
-void tps43_note_usb_host_service(uint32_t duration_us) {
-    counters.usb_host_service_calls++;
-    counters.usb_host_service_total_us += duration_us;
-    counters.usb_host_service_max_us = std::max(counters.usb_host_service_max_us, duration_us);
+void tps43_note_usb_host_service(uint64_t finished_us, uint32_t duration_us) {
+    note_service(finished_us, duration_us, last_usb_host_service_us, counters.usb_host_service_calls,
+        counters.usb_host_service_total_us, counters.usb_host_service_max_us, counters.usb_host_service_max_gap_us);
 }
 
-void tps43_note_usb_device_service(uint32_t duration_us) {
-    counters.usb_device_service_calls++;
-    counters.usb_device_service_total_us += duration_us;
-    counters.usb_device_service_max_us = std::max(counters.usb_device_service_max_us, duration_us);
+void tps43_note_usb_device_service(uint64_t finished_us, uint32_t duration_us) {
+    note_service(finished_us, duration_us, last_usb_device_service_us, counters.usb_device_service_calls,
+        counters.usb_device_service_total_us, counters.usb_device_service_max_us, counters.usb_device_service_max_gap_us);
+}
+
+void tps43_set_runtime_metrics_enabled(bool enabled) {
+    runtime_metrics_enabled = enabled;
+}
+
+bool tps43_runtime_metrics_enabled() {
+    return runtime_metrics_enabled;
 }
 
 void tps43_note_cursor_service(bool nonzero_motion) {
@@ -38,6 +58,8 @@ const Tps43RuntimeCounters& tps43_runtime_counters() {
 
 void tps43_reset_runtime_counters() {
     counters = {};
+    last_usb_host_service_us = 0;
+    last_usb_device_service_us = 0;
 }
 
 namespace {

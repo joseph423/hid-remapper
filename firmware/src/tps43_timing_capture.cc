@@ -9,7 +9,8 @@ namespace {
 
 constexpr size_t kCompactSamples = 20;
 constexpr size_t kContactSamples = 20;
-constexpr uint64_t kConcurrentDurationUs = 60 * 1000000ULL;
+constexpr uint64_t kConcurrentSettlingUs = 1000000;
+constexpr uint64_t kConcurrentDurationUs = 40 * 1000000ULL;
 constexpr uint64_t kManualDebugIntervalUs = 100000;
 
 uint32_t absolute_delta(int32_t value) {
@@ -30,6 +31,7 @@ void print_contact_slots(const Tps43Sample& sample) {
 void Tps43TimingCapture::begin() {
     printf("TPS43 async runtime timing capture; M = 15-second normal-use capture (no forced reads)\n");
     printf("D = toggle 10 Hz dual-pad compact-sample debug (cached samples; no extra sensor reads)\n");
+    printf("C = 40-second Phase 11 capture after a 1-second settling delay\n");
     printf("STAGE: one-finger compact report samples=%zu\n", kCompactSamples);
     print_sample_prompt();
 }
@@ -39,11 +41,7 @@ void Tps43TimingCapture::record(
     const Tps43Sample& sample,
     const Tps43ServiceTiming& timing,
     const Tps43Sample* diagnostic_contact_sample) {
-    if (stage_ == Stage::Concurrent) {
-        concurrent_max_service_us_ = std::max(concurrent_max_service_us_, timing.last_service_us);
-        if (now_us - concurrent_started_us_ >= kConcurrentDurationUs) {
-            finish_concurrent_capture(now_us, timing);
-        }
+    if (stage_ == Stage::ConcurrentSettling || stage_ == Stage::Concurrent) {
         return;
     }
 
@@ -88,7 +86,7 @@ void Tps43TimingCapture::record(
         }
         if (((stage_ == Stage::OneFinger || stage_ == Stage::TwoFinger) && captured_samples_ == kCompactSamples) ||
             (stage_ == Stage::Contact && captured_samples_ == kContactSamples)) {
-            finish_report_stage(now_us, timing);
+            finish_report_stage(now_us);
         }
         return;
     }
@@ -100,8 +98,18 @@ void Tps43TimingCapture::record_dual_input(
     const Tps43ServiceTiming& left_timing,
     const Tps43Sample& right_sample,
     const Tps43ServiceTiming& right_timing) {
-    record_input("left", left_sample, left_timing, left_input_session_);
-    record_input("right", right_sample, right_timing, right_input_session_);
+    if (stage_ == Stage::ConcurrentSettling && now_us >= concurrent_start_at_us_) {
+        start_concurrent_capture(now_us, left_timing, right_timing);
+    }
+    if (stage_ == Stage::Concurrent) {
+        update_concurrent_capture(now_us, left_sample, left_timing, right_sample, right_timing);
+        return;
+    }
+
+    if (manual_debug_enabled_) {
+        record_input("left", left_sample, left_timing, left_input_session_);
+        record_input("right", right_sample, right_timing, right_input_session_);
+    }
 
     if (!manual_debug_enabled_ || now_us - last_manual_debug_us_ < kManualDebugIntervalUs ||
         (!left_timing.last_sample_published && !right_timing.last_sample_published)) {
@@ -128,6 +136,10 @@ void Tps43TimingCapture::record_dual_input(
 
 bool Tps43TimingCapture::manual_debug_enabled() const {
     return manual_debug_enabled_;
+}
+
+bool Tps43TimingCapture::phase11_capture_busy() const {
+    return stage_ == Stage::ConcurrentSettling || stage_ == Stage::Concurrent;
 }
 
 void Tps43TimingCapture::record_input(
@@ -182,7 +194,7 @@ bool Tps43TimingCapture::wants_diagnostic_contact(
            sample.finger_count != 3;
 }
 
-void Tps43TimingCapture::finish_report_stage(uint64_t now_us, const Tps43ServiceTiming& timing) {
+void Tps43TimingCapture::finish_report_stage(uint64_t now_us) {
     armed_ = false;
     if (stage_ == Stage::OneFinger) {
         one_finger_mismatches_ = stage_mismatches_;
@@ -216,7 +228,7 @@ void Tps43TimingCapture::finish_report_stage(uint64_t now_us, const Tps43Service
         "contact_mismatches=%zu\n",
         one_finger_mismatches_ == 0 && two_finger_mismatches_ == 0 && contact_mismatches_ == 0 ? "pass" : "fail",
         one_finger_mismatches_, two_finger_mismatches_, contact_mismatches_);
-    start_concurrent_capture(now_us, timing);
+    request_concurrent_capture(now_us);
 }
 
 bool Tps43TimingCapture::diagnostic_contact_requested() const {
@@ -229,19 +241,25 @@ void Tps43TimingCapture::poll_serial() {
     int character;
     // Bound input processing even if the host continuously writes CDC data.
     for (unsigned n = 0; n < 32 && (character = getchar_timeout_us(0)) >= 0; ++n) {
-        if (character == 'd' || character == 'D') {
+        if ((character == 'c' || character == 'C') && !armed_ && !tps43_normal_capture_busy() &&
+            !phase11_capture_busy()) {
+            manual_debug_enabled_ = false;
+            left_input_session_ = {};
+            right_input_session_ = {};
+            request_concurrent_capture(time_us_64());
+        } else if ((character == 'd' || character == 'D') && !phase11_capture_busy()) {
             manual_debug_enabled_ = !manual_debug_enabled_;
             last_manual_debug_us_ = 0;
             printf("manual_debug=%s interval_ms=100 source=cached_compact_samples\n",
                 manual_debug_enabled_ ? "on" : "off");
-        } else if ((character == 'm' || character == 'M') && !armed_ && stage_ != Stage::Concurrent) {
+        } else if ((character == 'm' || character == 'M') && !armed_ && !phase11_capture_busy()) {
             tps43_normal_capture_start(time_us_64());
         } else if (character == '\r' || character == '\n') {
             enter_received = true;
         }
     }
     if (enter_received && !armed_ && !tps43_normal_capture_busy() &&
-        stage_ != Stage::Concurrent && stage_ != Stage::Complete) {
+        !phase11_capture_busy() && stage_ != Stage::Complete) {
         armed_ = true;
         captured_samples_ = 0;
         stage_mismatches_ = 0;
@@ -266,18 +284,49 @@ void Tps43TimingCapture::print_sample_prompt() const {
     }
 }
 
-void Tps43TimingCapture::start_concurrent_capture(uint64_t now_us, const Tps43ServiceTiming& timing) {
-    stage_ = Stage::Concurrent;
-    captured_samples_ = 0;
-    concurrent_started_us_ = now_us;
-    concurrent_max_service_us_ = 0;
-    concurrent_start_failures_ = timing.transfer_failures;
-    tps43_reset_runtime_counters();
-    printf("STAGE: concurrent sensor, USB, and cursor service duration=60 seconds\n");
-    printf("ACTION: use the TPS43 and USB keyboard continuously for 60 seconds; the run is recorded automatically\n");
+void Tps43TimingCapture::request_concurrent_capture(uint64_t now_us) {
+    stage_ = Stage::ConcurrentSettling;
+    concurrent_start_at_us_ = now_us + kConcurrentSettlingUs;
+    printf("PHASE11: starts in 1 second; run the four 10-second blocks for 40 seconds\n");
 }
 
-void Tps43TimingCapture::finish_concurrent_capture(uint64_t now_us, const Tps43ServiceTiming& timing) {
+void Tps43TimingCapture::start_concurrent_capture(uint64_t now_us, const Tps43ServiceTiming& left_timing, const Tps43ServiceTiming& right_timing) {
+    stage_ = Stage::Concurrent;
+    concurrent_started_us_ = now_us;
+    concurrent_left_ = {};
+    concurrent_right_ = {};
+    concurrent_left_.start_failures = left_timing.transfer_failures;
+    concurrent_left_.start_timeouts = left_timing.transfer_timeouts;
+    concurrent_right_.start_failures = right_timing.transfer_failures;
+    concurrent_right_.start_timeouts = right_timing.transfer_timeouts;
+    tps43_reset_runtime_counters();
+    tps43_set_runtime_metrics_enabled(true);
+    printf("PHASE11: recording 40 seconds; output is suppressed until the summary\n");
+}
+
+void Tps43TimingCapture::update_concurrent_pad(uint64_t now_us, const Tps43Sample& sample, const Tps43ServiceTiming& timing, ConcurrentPadMetrics& metrics) {
+    metrics.service_max_us = std::max(metrics.service_max_us, timing.last_service_us);
+    if (metrics.last_service_us != 0 && now_us >= metrics.last_service_us) {
+        const uint64_t gap_us = now_us - metrics.last_service_us;
+        metrics.service_max_gap_us = std::max(metrics.service_max_gap_us,
+            static_cast<uint32_t>(std::min<uint64_t>(gap_us, UINT32_MAX)));
+    }
+    metrics.last_service_us = now_us;
+    if (timing.last_sample_published) {
+        ++metrics.samples;
+        metrics.movement_samples += sample.movement_reported;
+    }
+}
+
+void Tps43TimingCapture::update_concurrent_capture(uint64_t now_us, const Tps43Sample& left_sample, const Tps43ServiceTiming& left_timing, const Tps43Sample& right_sample, const Tps43ServiceTiming& right_timing) {
+    update_concurrent_pad(now_us, left_sample, left_timing, concurrent_left_);
+    update_concurrent_pad(now_us, right_sample, right_timing, concurrent_right_);
+    if (now_us - concurrent_started_us_ >= kConcurrentDurationUs) {
+        finish_concurrent_capture(now_us, left_timing, right_timing);
+    }
+}
+
+void Tps43TimingCapture::finish_concurrent_capture(uint64_t now_us, const Tps43ServiceTiming& left_timing, const Tps43ServiceTiming& right_timing) {
     const Tps43RuntimeCounters& end_counters = tps43_runtime_counters();
     const uint64_t elapsed_us = now_us - concurrent_started_us_;
     const uint64_t host_calls = end_counters.usb_host_service_calls;
@@ -287,15 +336,28 @@ void Tps43TimingCapture::finish_concurrent_capture(uint64_t now_us, const Tps43S
     const uint64_t cursor_calls = end_counters.cursor_service_calls;
     const uint64_t cursor_nonzero = end_counters.cursor_nonzero_actions;
     printf(
-        "concurrent_elapsed_us=%lu host_service_calls=%lu host_total_us=%lu host_max_us=%lu "
-        "device_service_calls=%lu device_total_us=%lu device_max_us=%lu cursor_service_calls=%lu "
-        "cursor_nonzero_actions=%lu max_tps43_publish_us=%lu transfer_failures=%lu\n",
-        static_cast<unsigned long>(elapsed_us), static_cast<unsigned long>(host_calls),
-        static_cast<unsigned long>(host_total_us), static_cast<unsigned long>(end_counters.usb_host_service_max_us),
-        static_cast<unsigned long>(device_calls), static_cast<unsigned long>(device_total_us),
-        static_cast<unsigned long>(end_counters.usb_device_service_max_us), static_cast<unsigned long>(cursor_calls),
-        static_cast<unsigned long>(cursor_nonzero), static_cast<unsigned long>(concurrent_max_service_us_),
-        static_cast<unsigned long>(timing.transfer_failures - concurrent_start_failures_));
-    printf("RESULT: concurrent timing capture completed; compare USB and cursor observations with the approved error condition\n");
+        "PHASE11 elapsed_us=%lu left_samples=%lu left_movement=%lu left_service_max_us=%lu left_service_gap_max_us=%lu "
+        "left_failures=%lu left_timeouts=%lu right_samples=%lu right_movement=%lu right_service_max_us=%lu "
+        "right_service_gap_max_us=%lu right_failures=%lu right_timeouts=%lu host_service_calls=%lu host_total_us=%lu "
+        "host_max_us=%lu host_gap_max_us=%lu device_service_calls=%lu device_total_us=%lu device_max_us=%lu "
+        "device_gap_max_us=%lu cursor_service_calls=%lu cursor_nonzero_actions=%lu\n",
+        static_cast<unsigned long>(elapsed_us), static_cast<unsigned long>(concurrent_left_.samples),
+        static_cast<unsigned long>(concurrent_left_.movement_samples), static_cast<unsigned long>(concurrent_left_.service_max_us),
+        static_cast<unsigned long>(concurrent_left_.service_max_gap_us),
+        static_cast<unsigned long>(left_timing.transfer_failures - concurrent_left_.start_failures),
+        static_cast<unsigned long>(left_timing.transfer_timeouts - concurrent_left_.start_timeouts),
+        static_cast<unsigned long>(concurrent_right_.samples), static_cast<unsigned long>(concurrent_right_.movement_samples),
+        static_cast<unsigned long>(concurrent_right_.service_max_us),
+        static_cast<unsigned long>(concurrent_right_.service_max_gap_us),
+        static_cast<unsigned long>(right_timing.transfer_failures - concurrent_right_.start_failures),
+        static_cast<unsigned long>(right_timing.transfer_timeouts - concurrent_right_.start_timeouts),
+        static_cast<unsigned long>(host_calls), static_cast<unsigned long>(host_total_us),
+        static_cast<unsigned long>(end_counters.usb_host_service_max_us),
+        static_cast<unsigned long>(end_counters.usb_host_service_max_gap_us), static_cast<unsigned long>(device_calls),
+        static_cast<unsigned long>(device_total_us), static_cast<unsigned long>(end_counters.usb_device_service_max_us),
+        static_cast<unsigned long>(end_counters.usb_device_service_max_gap_us), static_cast<unsigned long>(cursor_calls),
+        static_cast<unsigned long>(cursor_nonzero));
+    printf("PHASE11 DONE: review the summary against approved conditions before setting timing limits\n");
+    tps43_set_runtime_metrics_enabled(false);
     stage_ = Stage::Complete;
 }

@@ -56,4 +56,23 @@ int main() {
     input = { 'm' };
     capture.poll_serial();
     assert(!tps43_normal_capture_busy());
+
+    Tps43TimingCapture phase11_capture;
+    input = { 'D' };
+    phase11_capture.poll_serial();
+    assert(phase11_capture.manual_debug_enabled());
+    input = { 'C' };
+    phase11_capture.poll_serial();
+    assert(phase11_capture.phase11_capture_busy());
+    assert(!phase11_capture.manual_debug_enabled());
+    assert(!tps43_runtime_metrics_enabled());
+    Tps43Sample sample;
+    Tps43ServiceTiming timing;
+    fake_now += 1000000;
+    phase11_capture.record_dual_input(fake_now, sample, timing, sample, timing);
+    assert(tps43_runtime_metrics_enabled());
+    fake_now += 40000000;
+    phase11_capture.record_dual_input(fake_now, sample, timing, sample, timing);
+    assert(!phase11_capture.phase11_capture_busy());
+    assert(!tps43_runtime_metrics_enabled());
 }

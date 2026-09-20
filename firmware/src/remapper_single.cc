@@ -46,9 +46,15 @@ void read_report(bool* new_report, bool* tick) {
     *tick = get_and_clear_tick_pending();
 
     reports_received = false;
-    const uint32_t host_service_started_us = time_us_32();
-    tuh_task();
-    tps43_note_usb_host_service(time_us_32() - host_service_started_us);
+    if (tps43_runtime_metrics_enabled()) {
+        const uint64_t host_service_started_us = time_us_64();
+        tuh_task();
+        const uint64_t host_service_finished_us = time_us_64();
+        tps43_note_usb_host_service(
+            host_service_finished_us, static_cast<uint32_t>(host_service_finished_us - host_service_started_us));
+    } else {
+        tuh_task();
+    }
     *new_report = reports_received;
 }
 

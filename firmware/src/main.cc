@@ -368,9 +368,15 @@ int main() {
             mcp4651_write();
 #endif
         }
-        const uint32_t device_service_started_us = time_us_32();
-        tud_task();
-        tps43_note_usb_device_service(time_us_32() - device_service_started_us);
+        if (tps43_runtime_metrics_enabled()) {
+            const uint64_t device_service_started_us = time_us_64();
+            tud_task();
+            const uint64_t device_service_finished_us = time_us_64();
+            tps43_note_usb_device_service(
+                device_service_finished_us, static_cast<uint32_t>(device_service_finished_us - device_service_started_us));
+        } else {
+            tud_task();
+        }
         tps43_cdc_stdio_flush();
         tps43_timing_capture.poll_serial();
         if (boot_protocol_updated) {
