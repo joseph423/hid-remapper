@@ -106,7 +106,9 @@ uint16_t prev_adc_state[NADCS] = { 0 };
 void print_stats_maybe() {
     uint64_t now = time_us_64();
     if (now > next_print) {
-        if (!tps43_normal_capture_busy()) {
+        // Phase 11 measures service gaps, so periodic CDC diagnostics must not
+        // add work or traffic during its bounded capture interval.
+        if (!tps43_normal_capture_busy() && !tps43_timing_capture.phase11_capture_busy()) {
             print_stats();
             const Tps43ServiceTiming& left_timing = left_tps43_driver.timing();
             const Tps43ServiceTiming& right_timing = right_tps43_driver.timing();
