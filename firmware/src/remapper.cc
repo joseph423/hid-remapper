@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -88,6 +89,11 @@ std::vector<uint8_t> report_ids;
 int32_t input_state[MAX_INPUT_STATES * 2];
 tap_hold_state_t tap_hold_state[MAX_INPUT_STATES];
 uint8_t sticky_state[MAX_INPUT_STATES];                  // state per layer (mask)
+// Descriptor reconstruction uses these fixed state-slot flags instead of
+// temporary hash sets. Reconfiguration must remain within the Pico heap while
+// a USB keyboard descriptor is resident.
+std::array<uint8_t, MAX_INPUT_STATES> relative_state_flags;
+std::array<uint8_t, MAX_INPUT_STATES> binary_state_flags;
 std::unordered_map<uint64_t, int32_t*> usage_state_ptr;  // usage -> input_state pointer
 uint32_t used_state_slots = 0;
 
@@ -381,7 +387,24 @@ inline uint8_t* get_sticky_state_ptr(uint32_t usage, uint8_t hub_port, bool assi
     return NULL;
 }
 
+bool mark_derivative_state(std::array<uint8_t, MAX_INPUT_STATES>& flags, int32_t* state_ptr) {
+    if (state_ptr == NULL || state_ptr < input_state || state_ptr >= input_state + MAX_INPUT_STATES) {
+        return false;
+    }
+    flags[state_ptr - input_state] = true;
+    return true;
+}
+
+bool derivative_state_is_marked(const std::array<uint8_t, MAX_INPUT_STATES>& flags, const int32_t* state_ptr) {
+    return state_ptr != NULL && state_ptr >= input_state && state_ptr < input_state + MAX_INPUT_STATES &&
+           flags[state_ptr - input_state] != 0;
+}
+
 void set_mapping_from_config() {
+    // Mapping construction uses several temporary hash tables. Keep them in a
+    // narrower scope so their storage is released before rebuilding data that
+    // depends on an attached device descriptor.
+    {
     std::unordered_map<uint64_t, std::vector<map_source_t>> reverse_mapping_map;  // hub_port+target -> sources list
     std::unordered_map<uint64_t, uint8_t> sticky_usage_map;
     std::unordered_map<uint64_t, uint8_t> tap_sticky_usage_map;
@@ -492,7 +515,6 @@ void set_mapping_from_config() {
             tap_hold_usage_set.insert(((uint64_t) source_port << 32) | mapping.source_usage);
         }
     }
-
     my_mutex_enter(MutexId::MACROS);
     for (int macro = 0; macro < NMACROS; macro++) {
         for (auto const& usages : macros[macro]) {
@@ -711,9 +733,12 @@ void set_mapping_from_config() {
             reverse_mapping.push_back(std::move(rev_map));
         }
     }
-
     set_gpio_inout_masks(gpio_in_mask_, gpio_out_mask_);
-    update_their_descriptor_derivates();
+    }
+
+    // The attached-device descriptor is unchanged by a configuration save.
+    // Rebuild mapping-dependent data only; retain the already published usage list.
+    update_their_descriptor_derivates(false);
 }
 
 bool differ_on_absolute(const uint8_t* report1, const uint8_t* report2, uint8_t report_id) {
@@ -1866,15 +1891,36 @@ bool should_scale_input(const usage_def_t& their_usage) {
     return true;
 }
 
-void update_their_descriptor_derivates() {
-    std::unordered_set<int32_t*> relative_usage_set;
-    std::unordered_set<int32_t*> binary_usage_set;
+template <typename DerivedUsageMap>
+void clear_derived_usage_vectors(DerivedUsageMap& usage_map) {
+    for (auto& [interface, report_vectors] : usage_map) {
+        for (auto& [report_id, values] : report_vectors) {
+            values.clear();
+        }
+    }
+}
+
+void update_their_descriptor_derivates(bool descriptor_changed) {
     std::set<uint64_t> their_usage_ranges_set;
+    relative_state_flags.fill(false);
+    binary_state_flags.fill(false);
 
     relative_usages.clear();
-    their_used_usages.clear();
-    array_range_usages.clear();
-    rollover_usages.clear();
+    if (descriptor_changed) {
+        // A descriptor changed, so report/interface keys and their capacities
+        // may no longer describe the connected device.
+        their_used_usages.clear();
+        array_range_usages.clear();
+        rollover_usages.clear();
+    } else {
+        // A configuration save rebuilds pointers into the same attached-device
+        // descriptor. Preserve vector capacity from the previous build: the
+        // Pico heap cannot grow after a keyboard has mounted, and discarding
+        // these buffers makes the replacement allocation fatal.
+        clear_derived_usage_vectors(their_used_usages);
+        clear_derived_usage_vectors(array_range_usages);
+        clear_derived_usage_vectors(rollover_usages);
+    }
 
     for (auto& [interface, report_id_usage_map] : their_usages) {
         uint8_t hub_port = hub_ports[interface >> 8];
@@ -1886,34 +1932,20 @@ void update_their_descriptor_derivates() {
                     int32_t* state_ptr_n = get_state_ptr(usage, hub_port);
                     int32_t* state_ptr_raw_0 = get_state_ptr(usage, 0, false, true);
                     int32_t* state_ptr_raw_n = get_state_ptr(usage, hub_port, false, true);
-                    their_usage_ranges_set.insert(((uint64_t) usage << 32) | usage);
+                    if (descriptor_changed) {
+                        their_usage_ranges_set.insert(((uint64_t) usage << 32) | usage);
+                    }
                     if (usage_def.is_relative) {
-                        if (state_ptr_0 != NULL) {
-                            relative_usage_set.insert(state_ptr_0);
-                        }
-                        if (state_ptr_n != NULL) {
-                            relative_usage_set.insert(state_ptr_n);
-                        }
-                        if (state_ptr_raw_0 != NULL) {
-                            relative_usage_set.insert(state_ptr_raw_0);
-                        }
-                        if (state_ptr_raw_n != NULL) {
-                            relative_usage_set.insert(state_ptr_raw_n);
-                        }
+                        mark_derivative_state(relative_state_flags, state_ptr_0);
+                        mark_derivative_state(relative_state_flags, state_ptr_n);
+                        mark_derivative_state(relative_state_flags, state_ptr_raw_0);
+                        mark_derivative_state(relative_state_flags, state_ptr_raw_n);
                     }
                     if ((usage_def.size == 1) || usage_def.is_array) {
-                        if (state_ptr_0 != NULL) {
-                            binary_usage_set.insert(state_ptr_0);
-                        }
-                        if (state_ptr_n != NULL) {
-                            binary_usage_set.insert(state_ptr_n);
-                        }
-                        if (state_ptr_raw_0 != NULL) {
-                            binary_usage_set.insert(state_ptr_raw_0);
-                        }
-                        if (state_ptr_raw_n != NULL) {
-                            binary_usage_set.insert(state_ptr_raw_n);
-                        }
+                        mark_derivative_state(binary_state_flags, state_ptr_0);
+                        mark_derivative_state(binary_state_flags, state_ptr_n);
+                        mark_derivative_state(binary_state_flags, state_ptr_raw_0);
+                        mark_derivative_state(binary_state_flags, state_ptr_raw_n);
                     }
                     if ((state_ptr_0 != NULL) || (state_ptr_n != NULL)) {
                         usage_def.input_state_0 = state_ptr_0;
@@ -1936,7 +1968,9 @@ void update_their_descriptor_derivates() {
                         rollover_usages[interface][report_id].push_back(usage_def);
                     }
                 } else {  // usage_maximum != 0, array range usage
-                    their_usage_ranges_set.insert(((uint64_t) usage << 32) | usage_def.usage_maximum);
+                    if (descriptor_changed) {
+                        their_usage_ranges_set.insert(((uint64_t) usage << 32) | usage_def.usage_maximum);
+                    }
                     bool any_used = false;
                     for (uint32_t actual_usage = usage; actual_usage <= usage_def.usage_maximum; actual_usage++) {
                         int32_t* state_ptr_0 = get_state_ptr(actual_usage, 0);
@@ -1944,12 +1978,12 @@ void update_their_descriptor_derivates() {
                         if (state_ptr_0 != NULL) {
                             any_used = true;
                             array_range_usages[interface][report_id].push_back(state_ptr_0);
-                            binary_usage_set.insert(state_ptr_0);
+                            mark_derivative_state(binary_state_flags, state_ptr_0);
                         }
                         if (state_ptr_n != NULL) {
                             any_used = true;
                             array_range_usages[interface][report_id].push_back(state_ptr_n);
-                            binary_usage_set.insert(state_ptr_n);
+                            mark_derivative_state(binary_state_flags, state_ptr_n);
                         }
                         if (actual_usage == ROLLOVER_USAGE) {
                             rollover_usages[interface][report_id].push_back((usage_def_t) {
@@ -1972,17 +2006,21 @@ void update_their_descriptor_derivates() {
         }
     }
 
-    for (int32_t* ptr : relative_usage_set) {
-        relative_usages.push_back(ptr);
+    for (uint32_t index = 0; index < used_state_slots; ++index) {
+        if (relative_state_flags[index]) {
+            relative_usages.push_back(input_state + index);
+        }
     }
 
-    their_usages_rle.clear();
-    rlencode(their_usage_ranges_set, their_usages_rle);
+    if (descriptor_changed) {
+        their_usages_rle.clear();
+        rlencode(their_usage_ranges_set, their_usages_rle);
+    }
 
     for (auto& rev_map : reverse_mapping) {
         for (auto& map_source : rev_map.sources) {
-            map_source.is_relative = relative_usage_set.count(map_source.input_state) > 0;
-            map_source.is_binary = ((binary_usage_set.count(map_source.input_state) > 0) &&
+            map_source.is_relative = derivative_state_is_marked(relative_state_flags, map_source.input_state);
+            map_source.is_binary = ((derivative_state_is_marked(binary_state_flags, map_source.input_state)) &&
                                        (map_source.usage != H_SCROLL_USAGE) &&
                                        !((map_source.usage >= 0x00010030) && (map_source.usage <= 0x00010039))) ||
                                    ((map_source.usage & 0xFFFF0000) == GPIO_USAGE_PAGE);
