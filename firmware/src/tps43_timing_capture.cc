@@ -335,12 +335,14 @@ void Tps43TimingCapture::finish_concurrent_capture(uint64_t now_us, const Tps43S
     const uint64_t device_total_us = end_counters.usb_device_service_total_us;
     const uint64_t cursor_calls = end_counters.cursor_service_calls;
     const uint64_t cursor_nonzero = end_counters.cursor_nonzero_actions;
+    const uint64_t scroll_calls = end_counters.scroll_report_calls;
     printf(
         "PHASE11 elapsed_us=%lu left_samples=%lu left_movement=%lu left_service_max_us=%lu left_service_gap_max_us=%lu "
         "left_failures=%lu left_timeouts=%lu right_samples=%lu right_movement=%lu right_service_max_us=%lu "
         "right_service_gap_max_us=%lu right_failures=%lu right_timeouts=%lu host_service_calls=%lu host_total_us=%lu "
         "host_max_us=%lu host_gap_max_us=%lu device_service_calls=%lu device_total_us=%lu device_max_us=%lu "
-        "device_gap_max_us=%lu cursor_service_calls=%lu cursor_nonzero_actions=%lu\n",
+        "device_gap_max_us=%lu cursor_service_calls=%lu cursor_nonzero_actions=%lu "
+        "scroll_report_calls=%lu scroll_report_gap_max_us=%lu\n",
         static_cast<unsigned long>(elapsed_us), static_cast<unsigned long>(concurrent_left_.samples),
         static_cast<unsigned long>(concurrent_left_.movement_samples), static_cast<unsigned long>(concurrent_left_.service_max_us),
         static_cast<unsigned long>(concurrent_left_.service_max_gap_us),
@@ -356,7 +358,8 @@ void Tps43TimingCapture::finish_concurrent_capture(uint64_t now_us, const Tps43S
         static_cast<unsigned long>(end_counters.usb_host_service_max_gap_us), static_cast<unsigned long>(device_calls),
         static_cast<unsigned long>(device_total_us), static_cast<unsigned long>(end_counters.usb_device_service_max_us),
         static_cast<unsigned long>(end_counters.usb_device_service_max_gap_us), static_cast<unsigned long>(cursor_calls),
-        static_cast<unsigned long>(cursor_nonzero));
+        static_cast<unsigned long>(cursor_nonzero), static_cast<unsigned long>(scroll_calls),
+        static_cast<unsigned long>(end_counters.scroll_report_max_gap_us));
     printf("PHASE11 DONE: review the summary against approved conditions before setting timing limits\n");
     tps43_set_runtime_metrics_enabled(false);
     stage_ = Stage::Complete;

@@ -16,6 +16,8 @@ struct Tps43RuntimeCounters {
     uint32_t usb_device_service_max_gap_us = 0;
     uint64_t cursor_service_calls = 0;
     uint64_t cursor_nonzero_actions = 0;
+    uint64_t scroll_report_calls = 0;
+    uint32_t scroll_report_max_gap_us = 0;
 };
 
 // Records one USB host service invocation for the physical timing handoff.
@@ -30,8 +32,8 @@ void tps43_set_runtime_metrics_enabled(bool enabled);
 // Returns whether the current service loop should record Phase 11 timing metrics.
 bool tps43_runtime_metrics_enabled();
 
-// Records one logical cursor-service invocation and whether it carried motion.
-void tps43_note_cursor_service(bool nonzero_motion);
+// Records one logical pointer-service invocation and any cursor or scroll action.
+void tps43_note_pointer_service(bool nonzero_cursor_motion, bool nonzero_scroll_motion, uint64_t timestamp_us);
 
 // Returns cumulative runtime counters without resetting them.
 const Tps43RuntimeCounters& tps43_runtime_counters();

@@ -12,6 +12,7 @@ namespace {
 Tps43RuntimeCounters counters;
 uint64_t last_usb_host_service_us = 0;
 uint64_t last_usb_device_service_us = 0;
+uint64_t last_scroll_report_us = 0;
 bool runtime_metrics_enabled = false;
 
 void note_service(uint64_t finished_us, uint32_t duration_us, uint64_t& previous_us, uint64_t& calls, uint64_t& total_us, uint32_t& maximum_us, uint32_t& maximum_gap_us) {
@@ -45,10 +46,22 @@ bool tps43_runtime_metrics_enabled() {
     return runtime_metrics_enabled;
 }
 
-void tps43_note_cursor_service(bool nonzero_motion) {
+void tps43_note_pointer_service(bool nonzero_cursor_motion, bool nonzero_scroll_motion, uint64_t timestamp_us) {
+    if (!runtime_metrics_enabled) {
+        return;
+    }
     counters.cursor_service_calls++;
-    if (nonzero_motion) {
+    if (nonzero_cursor_motion) {
         counters.cursor_nonzero_actions++;
+    }
+    if (nonzero_scroll_motion) {
+        ++counters.scroll_report_calls;
+        if (last_scroll_report_us != 0 && timestamp_us >= last_scroll_report_us) {
+            counters.scroll_report_max_gap_us = std::max(
+                counters.scroll_report_max_gap_us,
+                static_cast<uint32_t>(std::min<uint64_t>(timestamp_us - last_scroll_report_us, UINT32_MAX)));
+        }
+        last_scroll_report_us = timestamp_us;
     }
 }
 
@@ -60,6 +73,7 @@ void tps43_reset_runtime_counters() {
     counters = {};
     last_usb_host_service_us = 0;
     last_usb_device_service_us = 0;
+    last_scroll_report_us = 0;
 }
 
 namespace {

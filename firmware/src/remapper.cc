@@ -1848,7 +1848,8 @@ void inject_tps43_output(int32_t cursor_x, int32_t cursor_y, int32_t scroll_x, i
     add_relative(kMousePanUsage, scroll_x);
     set_button(kMouseButton1Usage, left_button_held);
     set_button(kMouseButton2Usage, right_button_held);
-    tps43_note_cursor_service(cursor_x != 0 || cursor_y != 0);
+    const uint64_t metrics_timestamp_us = tps43_runtime_metrics_enabled() ? get_time() : 0;
+    tps43_note_pointer_service(cursor_x != 0 || cursor_y != 0, scroll_x != 0 || scroll_y != 0, metrics_timestamp_us);
 }
 
 void rlencode(const std::set<uint64_t>& usage_ranges, std::vector<usage_rle_t>& output) {

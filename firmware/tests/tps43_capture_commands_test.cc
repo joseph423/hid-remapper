@@ -75,4 +75,13 @@ int main() {
     phase11_capture.record_dual_input(fake_now, sample, timing, sample, timing);
     assert(!phase11_capture.phase11_capture_busy());
     assert(!tps43_runtime_metrics_enabled());
+
+    tps43_reset_runtime_counters();
+    tps43_set_runtime_metrics_enabled(true);
+    tps43_note_pointer_service(false, true, 1000);
+    tps43_note_pointer_service(false, true, 1250);
+    const Tps43RuntimeCounters& counters = tps43_runtime_counters();
+    assert(counters.scroll_report_calls == 2);
+    assert(counters.scroll_report_max_gap_us == 250);
+    tps43_set_runtime_metrics_enabled(false);
 }
