@@ -1925,6 +1925,40 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
     for (auto& [interface, report_id_usage_map] : their_usages) {
         uint8_t hub_port = hub_ports[interface >> 8];
         for (auto& [report_id, usage_map] : report_id_usage_map) {
+            auto& used_usages = their_used_usages[interface][report_id];
+            size_t required_capacity = 0;
+            // Count the entries before appending so the first descriptor build
+            // allocates the final vector once instead of growing 32 -> 64 and
+            // requiring the old and new buffers to coexist.
+            for (auto const& [candidate_usage, candidate_def] : usage_map) {
+                if (candidate_def.usage_maximum == 0) {
+                    if ((get_state_ptr(candidate_usage, 0) != NULL) ||
+                        (get_state_ptr(candidate_usage, hub_port) != NULL)) {
+                        ++required_capacity;
+                    }
+                    if ((get_state_ptr(candidate_usage, 0, false, true) != NULL) ||
+                        (get_state_ptr(candidate_usage, hub_port, false, true) != NULL)) {
+                        ++required_capacity;
+                    }
+                } else {
+                    bool any_used = false;
+                    for (uint32_t actual_usage = candidate_usage;
+                         actual_usage <= candidate_def.usage_maximum;
+                         actual_usage++) {
+                        if ((get_state_ptr(actual_usage, 0) != NULL) ||
+                            (get_state_ptr(actual_usage, hub_port) != NULL)) {
+                            any_used = true;
+                            break;
+                        }
+                    }
+                    if (any_used) {
+                        ++required_capacity;
+                    }
+                }
+            }
+            if (used_usages.capacity() < required_capacity) {
+                used_usages.reserve(required_capacity);
+            }
             for (auto [usage, usage_def] : usage_map) {
                 usage_def.should_be_scaled = should_scale_input(usage_def);
                 if (usage_def.usage_maximum == 0) {
@@ -1950,7 +1984,7 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                     if ((state_ptr_0 != NULL) || (state_ptr_n != NULL)) {
                         usage_def.input_state_0 = state_ptr_0;
                         usage_def.input_state_n = state_ptr_n;
-                        their_used_usages[interface][report_id].push_back((usage_usage_def_t) {
+                        used_usages.push_back((usage_usage_def_t) {
                             .usage = usage,
                             .usage_def = usage_def,
                         });
@@ -1959,7 +1993,7 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                         usage_def.input_state_0 = state_ptr_raw_0;
                         usage_def.input_state_n = state_ptr_raw_n;
                         usage_def.should_be_scaled = false;
-                        their_used_usages[interface][report_id].push_back((usage_usage_def_t) {
+                        used_usages.push_back((usage_usage_def_t) {
                             .usage = usage,
                             .usage_def = usage_def,
                         });
@@ -1996,7 +2030,7 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                         }
                     }
                     if (any_used) {
-                        their_used_usages[interface][report_id].push_back((usage_usage_def_t) {
+                        used_usages.push_back((usage_usage_def_t) {
                             .usage = usage,
                             .usage_def = usage_def,
                         });
