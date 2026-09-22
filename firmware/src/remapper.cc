@@ -1928,6 +1928,7 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
         for (auto& [report_id, usage_map] : report_id_usage_map) {
             auto& used_usages = their_used_usages[interface][report_id];
             size_t required_capacity = 0;
+            size_t array_range_required_capacity = 0;
             // Count the entries before appending so the first descriptor build
             // allocates the final vector once instead of growing 32 -> 64 and
             // requiring the old and new buffers to coexist.
@@ -1946,10 +1947,16 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                     for (uint32_t actual_usage = candidate_usage;
                          actual_usage <= candidate_def.usage_maximum;
                          actual_usage++) {
-                        if ((get_state_ptr(actual_usage, 0) != NULL) ||
-                            (get_state_ptr(actual_usage, hub_port) != NULL)) {
+                        int32_t* state_ptr_0 = get_state_ptr(actual_usage, 0);
+                        int32_t* state_ptr_n = get_state_ptr(actual_usage, hub_port);
+                        if ((state_ptr_0 != NULL) || (state_ptr_n != NULL)) {
                             any_used = true;
-                            break;
+                        }
+                        if (state_ptr_0 != NULL) {
+                            ++array_range_required_capacity;
+                        }
+                        if (state_ptr_n != NULL) {
+                            ++array_range_required_capacity;
                         }
                     }
                     if (any_used) {
@@ -1959,6 +1966,13 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
             }
             if (used_usages.capacity() < required_capacity) {
                 used_usages.reserve(required_capacity);
+            }
+            auto& array_range_vector = array_range_usages[interface][report_id];
+            if (array_range_vector.capacity() < array_range_required_capacity) {
+                // Reserve before appending array-range pointers so a growth
+                // reallocation cannot temporarily require both old and new
+                // buffers on the memory-constrained Pico.
+                array_range_vector.reserve(array_range_required_capacity);
             }
             for (auto [usage, usage_def] : usage_map) {
                 usage_def.should_be_scaled = should_scale_input(usage_def);
@@ -2012,12 +2026,12 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                         int32_t* state_ptr_n = get_state_ptr(actual_usage, hub_port);
                         if (state_ptr_0 != NULL) {
                             any_used = true;
-                            array_range_usages[interface][report_id].push_back(state_ptr_0);
+                            array_range_vector.push_back(state_ptr_0);
                             mark_derivative_state(binary_state_flags, state_ptr_0);
                         }
                         if (state_ptr_n != NULL) {
                             any_used = true;
-                            array_range_usages[interface][report_id].push_back(state_ptr_n);
+                            array_range_vector.push_back(state_ptr_n);
                             mark_derivative_state(binary_state_flags, state_ptr_n);
                         }
                         if (actual_usage == ROLLOVER_USAGE) {
