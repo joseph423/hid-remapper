@@ -4,6 +4,20 @@
 #include <cstdint>
 #include <limits>
 
+namespace {
+
+bool qualifies_left_assisted_drag(const PadState& right, int32_t threshold) {
+    if (!right.movement_reported || threshold <= 0) {
+        return false;
+    }
+
+    const int64_t absolute_x = right.relative_x < 0 ? -static_cast<int64_t>(right.relative_x) : right.relative_x;
+    const int64_t absolute_y = right.relative_y < 0 ? -static_cast<int64_t>(right.relative_y) : right.relative_y;
+    return absolute_x >= threshold || absolute_y >= threshold;
+}
+
+}  // namespace
+
 DualTps43Fsm::DualTps43Fsm(DualTps43Tuning tuning)
     : tuning_(tuning) {
 }
@@ -33,6 +47,9 @@ LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
     if (snapshot.right.active && snapshot.right.movement_reported) {
         right_session_.movement_seen = true;
     }
+    if (snapshot.right.active && qualifies_left_assisted_drag(snapshot.right, tuning_.left_assisted_drag_axis_threshold)) {
+        right_session_.drag_movement_qualified = true;
+    }
 
     // Dispatch a locked mode before evaluating any Idle transition. This is
     // the mode-priority boundary that prevents ignored input from replacing an
@@ -53,7 +70,7 @@ LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
             break;
         case Mode::Idle:
             actions = process_idle(snapshot, left_was_stationary, right_was_stationary,
-                previous_right_active_ && right_was_moving);
+                previous_right_active_ && right_was_moving, right_session_.drag_movement_qualified);
             break;
     }
 
@@ -71,6 +88,7 @@ void DualTps43Fsm::begin_session_if_needed(const PadState& pad, SessionState& se
     session.id = pad.session_id;
     session.started_us = pad.timestamp_us != 0 ? pad.timestamp_us : now_us;
     session.movement_seen = false;
+    session.drag_movement_qualified = false;
     session.preceding_other_session_id = preceding_other_session_id;
 }
 
@@ -246,7 +264,8 @@ LogicalActions DualTps43Fsm::process_right_latched_drag(const DualPadSnapshot& s
     return actions;
 }
 
-LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool left_was_stationary, bool right_was_stationary, bool right_was_moving) {
+LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool left_was_stationary, bool right_was_stationary,
+    bool right_was_moving, bool right_drag_movement_qualified) {
     // The order below is intentional: same-cycle neutral entry, ordered
     // cross-pad taps, mode-entry gestures, and finally ordinary one-pad output.
     if (snapshot.left.touch_started && snapshot.right.touch_started) {
@@ -310,7 +329,7 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
     }
 
     if ((left_was_stationary || left_stationary_now) && snapshot.right.active && snapshot.right.finger_count == 1 &&
-        (snapshot.right.movement_reported || right_was_moving)) {
+        right_drag_movement_qualified) {
         mode_ = Mode::LeftAssistedDrag;
         consume_left_session(snapshot.left);
         consume_right_session(snapshot.right);

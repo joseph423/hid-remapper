@@ -65,6 +65,7 @@ DualTps43Tuning phase10_provisional_tuning() {
     tuning.cursor_gain = { 128, 128, 4000, 256, 15000 };
     tuning.scroll_gain = { 4, 4, 4000, 256, 15000 };
     tuning.scroll_momentum = { 0, 0, 0, 0 };
+    tuning.left_assisted_drag_axis_threshold = 2;
     return tuning;
 }
 

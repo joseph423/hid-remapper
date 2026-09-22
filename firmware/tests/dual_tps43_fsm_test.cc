@@ -21,6 +21,19 @@ DualTps43Tuning phase5_behavior_tuning() {
     tuning.cursor_gain = { 512, 512, 1, 256, 100 };
     tuning.scroll_gain = { 768, 768, 1, 256, 100 };
     tuning.scroll_momentum = { 256, 0, 0, 0 };
+    tuning.left_assisted_drag_axis_threshold = 2;
+    return tuning;
+}
+
+DualTps43Tuning production_behavior_tuning() {
+    DualTps43Tuning tuning;
+    tuning.tap_max_duration_us = 200000;
+    tuning.stationary_intent_threshold_us = 100000;
+    tuning.neutral_activation_threshold = 20;
+    tuning.cursor_gain = { 128, 128, 4000, 256, 15000 };
+    tuning.scroll_gain = { 4, 4, 4000, 256, 15000 };
+    tuning.scroll_momentum = { 0, 0, 0, 0 };
+    tuning.left_assisted_drag_axis_threshold = 2;
     return tuning;
 }
 
@@ -35,6 +48,12 @@ Tps43Sample one_finger(int32_t x = 0, int32_t y = 0) {
     sample.relative_x = x;
     sample.relative_y = y;
     sample.movement_reported = x != 0 || y != 0;
+    return sample;
+}
+
+Tps43Sample one_finger_with_movement(int32_t x, int32_t y, bool movement_reported) {
+    Tps43Sample sample = one_finger(x, y);
+    sample.movement_reported = movement_reported;
     return sample;
 }
 
@@ -86,9 +105,18 @@ void require_no_action(const LogicalActions& actions) {
     require(actions.right_button == ButtonAction::None, "unexpected right-button action");
 }
 
+void require_no_button_action(const LogicalActions& actions) {
+    require(actions.left_button == ButtonAction::None && actions.right_button == ButtonAction::None,
+        "unexpected button action");
+}
+
 // Drives the public FSM boundary with normalized samples and controlled time.
 class Harness {
    public:
+    explicit Harness(DualTps43Tuning tuning = phase5_behavior_tuning())
+        : fsm_(tuning) {
+    }
+
     // Advances logical time, normalizes both samples, and returns one cycle's
     // logical actions.
     LogicalActions step(Tps43Sample left, Tps43Sample right, uint64_t advance_us = 100) {
@@ -233,7 +261,7 @@ int main() {
 
     run_case("PAD-10", [] {
         Harness harness;
-        require(harness.step(inactive(), one_finger(1, 0)).cursor_x == 2, "setup Right movement missing");
+        require(harness.step(inactive(), one_finger(2, 0)).cursor_x == 4, "setup Right movement missing");
         require_no_action(harness.step(one_finger(), one_finger()));
         const LogicalActions actions = harness.step(one_finger(), one_finger(), 200);
         require(actions.left_button == ButtonAction::Press, "stationary Left after moving Right must start Drag");
@@ -246,6 +274,68 @@ int main() {
         const LogicalActions actions = harness.step(one_finger(0, 2), one_finger(3, 0));
         require(actions.scroll_y == 6 && actions.cursor_x == 6, "Left movement must select scroll with concurrent cursor");
         require(actions.left_button == ButtonAction::None, "Left movement must not start Drag");
+    });
+
+    run_case("CHAR-01 one-unit Right movement does not activate delayed Left-assisted Drag", [] {
+        Harness harness(production_behavior_tuning());
+        require_no_action(harness.step(inactive(), one_finger(1, 0)));
+        require_no_action(harness.step(one_finger(), one_finger()));
+        const LogicalActions actions = harness.step(one_finger(), one_finger(), 100000);
+        require_no_button_action(actions);
+    });
+
+    run_case("CHAR-02 repeated one-unit Right movement does not accumulate into Drag", [] {
+        Harness harness(production_behavior_tuning());
+        require_no_action(harness.step(inactive(), one_finger(1, 0)));
+        require_no_button_action(harness.step(inactive(), one_finger(1, 0)));
+        require_no_action(harness.step(one_finger(), one_finger()));
+        const LogicalActions actions = harness.step(one_finger(), one_finger(), 100000);
+        require_no_button_action(actions);
+    });
+
+    run_case("CHAR-03 zero-delta Right movement flag does not activate Left-assisted Drag", [] {
+        Harness harness(production_behavior_tuning());
+        require_no_action(harness.step(inactive(), one_finger_with_movement(0, 0, true)));
+        require_no_action(harness.step(one_finger(), one_finger()));
+        const LogicalActions actions = harness.step(one_finger(), one_finger(), 100000);
+        require_no_action(actions);
+    });
+
+    run_case("CHAR-04 two-unit Right movement activates delayed Left-assisted Drag", [] {
+        Harness harness(production_behavior_tuning());
+        require_no_button_action(harness.step(inactive(), one_finger(2, 0)));
+        require_no_action(harness.step(one_finger(), one_finger()));
+        const LogicalActions actions = harness.step(one_finger(), one_finger(), 100000);
+        require(actions.left_button == ButtonAction::Press && actions.right_button == ButtonAction::None,
+            "two-unit Right movement must activate delayed Drag");
+    });
+
+    run_case("CHAR-05 one-unit Right three-finger movement still activates Right-latched Drag", [] {
+        Harness harness(production_behavior_tuning());
+        require_no_action(harness.step(inactive(), three_finger(0, 0, false)));
+        const LogicalActions actions = harness.step(inactive(), three_finger(1, 0, true));
+        require(actions.left_button == ButtonAction::Press,
+            "one-unit three-finger movement must characterize the current latched Drag activation");
+    });
+
+    run_case("CHAR-06 one-unit Left movement activates Left-scroll", [] {
+        Harness harness;
+        const LogicalActions actions = harness.step(one_finger(0, 1), inactive());
+        require(actions.left_button == ButtonAction::None && actions.scroll_y == 3,
+            "one-unit Left movement must characterize the current Left-scroll entry");
+    });
+
+    run_case("CHAR-07 one-unit Right scroll movement emits Right scroll", [] {
+        Harness harness;
+        const LogicalActions actions = harness.step(inactive(), two_finger_move(1, 0));
+        require(actions.right_button == ButtonAction::None && actions.scroll_x == 3,
+            "one-unit Right scroll movement must characterize the current scroll path");
+    });
+
+    run_case("CHAR-08 one-unit neutral movement remains below neutral threshold", [] {
+        Harness harness(production_behavior_tuning());
+        require_no_action(harness.step(one_finger(), one_finger()));
+        require_no_action(harness.step(one_finger(1, 0), one_finger()));
     });
 
     run_case("PAD-11", [] {

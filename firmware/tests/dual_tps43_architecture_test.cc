@@ -232,7 +232,7 @@ void verify_scroll_gaps_and_stationary_intent() {
     }
 
     AcquisitionHarness intent;
-    intent.right.set_next_sample(compact_sample(true, 1, 1, 0, 100));
+    intent.right.set_next_sample(compact_sample(true, 1, 2, 0, 100));
     intent.tick(100);
     intent.left.set_next_sample(compact_sample(true, 1, 0, 0, 200));
     intent.tick(200);

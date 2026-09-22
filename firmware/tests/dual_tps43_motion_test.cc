@@ -20,6 +20,7 @@ DualTps43Tuning motion_tuning() {
     tuning.cursor_gain = { 256, 1024, 1000, 256, 10000 };
     tuning.scroll_gain = { 256, 768, 1000, 256, 10000 };
     tuning.scroll_momentum = { 256, 256, 192, 100 };
+    tuning.left_assisted_drag_axis_threshold = 2;
     return tuning;
 }
 

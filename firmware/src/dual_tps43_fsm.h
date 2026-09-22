@@ -75,6 +75,9 @@ struct DualTps43Tuning {
     VelocityGainTuning cursor_gain;
     VelocityGainTuning scroll_gain;
     ScrollMomentumTuning scroll_momentum;
+    // Minimum absolute dx or dy in one Right report that qualifies
+    // Left-assisted Drag. This threshold is per-report, not accumulated.
+    int32_t left_assisted_drag_axis_threshold = 2;
 };
 
 // Interface between normalized dual-pad input and logical actions.
@@ -113,6 +116,10 @@ class DualTps43Fsm : public DualPadProcessor {
         uint32_t id = 0;
         uint64_t started_us = 0;
         bool movement_seen = false;
+        // True after one Right report qualifies the approved Left-assisted
+        // Drag threshold. This is separate from movement_seen so other
+        // gesture paths retain their existing movement semantics.
+        bool drag_movement_qualified = false;
         // Identity of the opposite touch already active when this session began.
         uint32_t preceding_other_session_id = 0;
     };
@@ -163,7 +170,8 @@ class DualTps43Fsm : public DualPadProcessor {
     LogicalActions process_left_scroll(const DualPadSnapshot& snapshot);
     LogicalActions process_left_assisted_drag(const DualPadSnapshot& snapshot);
     LogicalActions process_right_latched_drag(const DualPadSnapshot& snapshot);
-    LogicalActions process_idle(const DualPadSnapshot& snapshot, bool left_was_stationary, bool right_was_stationary, bool right_was_moving);
+    LogicalActions process_idle(const DualPadSnapshot& snapshot, bool left_was_stationary, bool right_was_stationary,
+        bool right_was_moving, bool right_drag_movement_qualified);
 
     // Raw normalized-motion collection helpers. Scaling occurs once after the
     // interaction policy has selected the cycle's logical actions.
