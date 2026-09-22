@@ -1032,6 +1032,7 @@ void handle_set_report1(uint8_t report_id, uint8_t const* buffer, uint16_t bufsi
                     }
                     break;
                 }
+                case ConfigCommand::GET_TPS43_TUNING:
                 case ConfigCommand::GET_CONFIG:
                     break;
                 case ConfigCommand::CLEAR_MAPPING:
