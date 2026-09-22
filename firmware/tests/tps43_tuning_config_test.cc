@@ -35,6 +35,18 @@ void assert_equal(const DualTps43Tuning& expected, const DualTps43Tuning& actual
 int main() {
     const DualTps43Tuning defaults = production_tuning();
     assert(validate_tps43_tuning(defaults));
+    assert_equal(defaults, configured_tps43_tuning());
+
+    DualTps43Tuning configured = defaults;
+    configured.cursor_gain.minimum_gain_q8 = 256;
+    configured.cursor_gain.maximum_gain_q8 = 256;
+    set_configured_tps43_tuning(configured);
+    assert_equal(configured, configured_tps43_tuning());
+
+    DualTps43Tuning invalid_configured = configured;
+    invalid_configured.scroll_gain.velocity_filter_weight_q8 = 257;
+    set_configured_tps43_tuning(invalid_configured);
+    assert_equal(defaults, configured_tps43_tuning());
 
     uint8_t buffer[kTps43TuningBlockSize] = {};
     assert(encode_tps43_tuning(defaults, buffer, sizeof(buffer)));

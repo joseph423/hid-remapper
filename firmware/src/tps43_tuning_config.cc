@@ -65,6 +65,11 @@ bool validate_momentum(const ScrollMomentumTuning& momentum) {
            momentum.decay_q8 < 256 && momentum.stop_velocity_logical_units_per_second > 0;
 }
 
+DualTps43Tuning& configured_tuning_storage() {
+    static DualTps43Tuning tuning = production_tuning();
+    return tuning;
+}
+
 void encode_velocity_gain(uint8_t*& cursor, const VelocityGainTuning& gain) {
     write_i32(cursor, gain.minimum_gain_q8);
     cursor += 4;
@@ -109,6 +114,14 @@ DualTps43Tuning production_tuning() {
     tuning.scroll_momentum = { 0, 0, 0, 0 };
     tuning.left_assisted_drag_axis_threshold = 2;
     return tuning;
+}
+
+DualTps43Tuning configured_tps43_tuning() {
+    return configured_tuning_storage();
+}
+
+void set_configured_tps43_tuning(const DualTps43Tuning& tuning) {
+    configured_tuning_storage() = validate_tps43_tuning(tuning) ? tuning : production_tuning();
 }
 
 bool validate_tps43_tuning(const DualTps43Tuning& tuning) {

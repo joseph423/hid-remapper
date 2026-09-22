@@ -16,6 +16,14 @@ constexpr std::size_t kTps43TuningBlockSize = 78;
 // profile. The returned value is independent of persisted configuration.
 DualTps43Tuning production_tuning();
 
+// Returns the validated tuning loaded from persistence, or the production
+// defaults before a persisted configuration has been loaded.
+DualTps43Tuning configured_tps43_tuning();
+
+// Replaces the persisted tuning candidate only when it is valid. Invalid input
+// falls back to the production defaults and is never retained.
+void set_configured_tps43_tuning(const DualTps43Tuning& tuning);
+
 // Validates field relationships and coefficient ranges without applying the
 // tuning to an active FSM.
 bool validate_tps43_tuning(const DualTps43Tuning& tuning);
