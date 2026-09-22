@@ -240,12 +240,36 @@ void verify_scroll_gaps_and_stationary_intent() {
         "stationary intent must advance on logical cycles without acquisitions");
 }
 
+void verify_service_order_equivalence() {
+    MockTps43Driver left_a, right_a, left_b, right_b;
+    RecordingProcessor processor_a, processor_b;
+    RecordingActionSink sink_a, sink_b;
+    DualTps43Coordinator left_first(left_a, right_a, processor_a, sink_a);
+    DualTps43Coordinator right_first(left_b, right_b, processor_b, sink_b, true);
+    const Tps43Sample left_sample = compact_sample(true, 1, 4, 0, 1000);
+    const Tps43Sample right_sample = compact_sample(true, 2, 0, 7, 1000);
+    left_a.set_next_sample(left_sample);
+    right_a.set_next_sample(right_sample);
+    left_b.set_next_sample(left_sample);
+    right_b.set_next_sample(right_sample);
+    left_first.service(1000);
+    right_first.service(1000);
+    require(sink_a.last_actions.cursor_x == sink_b.last_actions.cursor_x && sink_a.last_actions.cursor_y == sink_b.last_actions.cursor_y,
+        "service order must not change logical actions");
+    require(processor_a.last_snapshot.left.relative_x == processor_b.last_snapshot.left.relative_x &&
+                processor_a.last_snapshot.right.relative_y == processor_b.last_snapshot.right.relative_y &&
+                processor_a.last_snapshot.left.touch_started == processor_b.last_snapshot.left.touch_started &&
+                processor_a.last_snapshot.right.touch_started == processor_b.last_snapshot.right.touch_started,
+        "service order must not change the coherent snapshot");
+}
+
 }  // namespace
 
 int main() {
     verify_acquisition_edges();
     verify_motion_acquisition_timing();
     verify_scroll_gaps_and_stationary_intent();
+    verify_service_order_equivalence();
     MockTps43Driver left_driver;
     MockTps43Driver right_driver;
     RecordingProcessor processor;
