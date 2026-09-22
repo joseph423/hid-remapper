@@ -71,3 +71,8 @@ PadState PadStateTracker::update(const Tps43Sample& sample, bool fresh) {
 const PadState& PadStateTracker::state() const {
     return state_;
 }
+
+void PadStateTracker::reset() {
+    state_ = {};
+    have_sample_ = false;
+}

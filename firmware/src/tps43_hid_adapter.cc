@@ -10,6 +10,14 @@ void Tps43RemapperActionSink::apply(const LogicalActions& actions) {
         left_button_held_, right_button_held_);
 }
 
+void Tps43RemapperActionSink::reset() {
+    left_button_held_ = false;
+    right_button_held_ = false;
+    left_release_pending_ = false;
+    right_release_pending_ = false;
+    inject_tps43_output(0, 0, 0, 0, false, false);
+}
+
 void Tps43RemapperActionSink::apply_button_action(
     ButtonAction action,
     bool& held,

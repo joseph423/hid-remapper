@@ -60,6 +60,14 @@ DualTps43Coordinator tps43_coordinator(
     tps43_action_sink);
 Tps43TimingCapture tps43_timing_capture;
 
+void apply_configured_tps43_tuning() {
+    // Apply only at the main-loop boundary. Releasing the adapter first keeps
+    // a profile change from carrying a TPS43 click or drag into the next FSM.
+    tps43_action_sink.reset();
+    tps43_processor.set_tuning(configured_tps43_tuning());
+    tps43_coordinator.reset();
+}
+
 struct Tps43PadRuntimeStats {
     uint32_t published_samples = 0;
     uint32_t movement_samples = 0;
@@ -283,6 +291,7 @@ int main() {
     our_descriptor = &our_descriptors[our_descriptor_number];
     parse_our_descriptor();
     set_mapping_from_config();
+    apply_configured_tps43_tuning();
     board_init();
     extra_init();
     tusb_init();

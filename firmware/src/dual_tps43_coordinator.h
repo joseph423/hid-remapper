@@ -17,6 +17,9 @@ class DualTps43Coordinator {
 
     void service(uint64_t now_us);
 
+    // Discards both normalized touch histories before a new FSM profile starts.
+    void reset();
+
    private:
     Tps43Driver& left_driver_;
     Tps43Driver& right_driver_;

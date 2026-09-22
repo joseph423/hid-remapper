@@ -22,6 +22,30 @@ DualTps43Fsm::DualTps43Fsm(DualTps43Tuning tuning)
     : tuning_(tuning) {
 }
 
+void DualTps43Fsm::set_tuning(DualTps43Tuning tuning) {
+    tuning_ = tuning;
+    reset();
+}
+
+void DualTps43Fsm::reset() {
+    mode_ = Mode::Idle;
+    left_session_ = {};
+    right_session_ = {};
+    previous_left_active_ = false;
+    previous_right_active_ = false;
+    consumed_left_session_id_ = 0;
+    consumed_right_session_id_ = 0;
+    neutral_left_x_ = 0;
+    neutral_left_y_ = 0;
+    neutral_right_x_ = 0;
+    neutral_right_y_ = 0;
+    right_latched_saw_inactive_ = false;
+    right_latched_drop_session_id_ = 0;
+    cursor_motion_ = {};
+    scroll_motion_ = {};
+    scroll_source_this_cycle_ = ScrollSource::None;
+}
+
 LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
     scroll_source_this_cycle_ = ScrollSource::None;
 

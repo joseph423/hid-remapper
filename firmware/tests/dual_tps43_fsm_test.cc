@@ -131,6 +131,14 @@ class Harness {
         return fsm_.process(snapshot);
     }
 
+    // Reinitializes both input normalization and gesture policy as the runtime
+    // configuration path does when a new tuning profile becomes active.
+    void reset_with_tuning(DualTps43Tuning tuning) {
+        left_tracker_.reset();
+        right_tracker_.reset();
+        fsm_.set_tuning(tuning);
+    }
+
    private:
     uint64_t now_us_ = 0;
     PadStateTracker left_tracker_;
@@ -336,6 +344,18 @@ int main() {
         Harness harness(production_behavior_tuning());
         require_no_action(harness.step(one_finger(), one_finger()));
         require_no_action(harness.step(one_finger(1, 0), one_finger()));
+    });
+
+    run_case("RUNTIME-01 tuning reset clears an active Drag mode", [] {
+        Harness harness(production_behavior_tuning());
+        require_no_action(harness.step(one_finger(), inactive()));
+        require_no_action(harness.step(one_finger(), inactive(), 100000));
+        require(harness.step(one_finger(), one_finger(2, 0)).left_button == ButtonAction::Press,
+            "setup must enter Left-assisted Drag");
+
+        harness.reset_with_tuning(production_behavior_tuning());
+        require_no_action(harness.step(inactive(), inactive()));
+        require_no_action(harness.step(one_finger(), one_finger()));
     });
 
     run_case("PAD-11", [] {

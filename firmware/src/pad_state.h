@@ -46,6 +46,9 @@ class PadStateTracker {
     // Returns the latest normalized logical-cycle state without changing it.
     const PadState& state() const;
 
+    // Discards the current touch session and centroid baseline.
+    void reset();
+
    private:
     PadState state_;
     bool have_sample_ = false;

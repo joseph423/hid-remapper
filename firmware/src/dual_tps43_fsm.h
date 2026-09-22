@@ -103,6 +103,13 @@ class DualTps43Fsm : public DualPadProcessor {
     // logical actions, including any active post-release scroll momentum.
     LogicalActions process(const DualPadSnapshot& snapshot) override;
 
+    // Replaces the tuning and clears all gesture, motion, and momentum state.
+    // The caller must provide a tuning value that has already passed validation.
+    void set_tuning(DualTps43Tuning tuning);
+
+    // Clears all interaction state while preserving the current tuning.
+    void reset();
+
    private:
     enum class Mode {
         Idle,

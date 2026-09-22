@@ -18,6 +18,9 @@ class Tps43RemapperActionSink final : public Tps43ActionSink {
     // Applies one logical action cycle without calling TinyUSB directly.
     void apply(const LogicalActions& actions) override;
 
+    // Releases TPS43-owned buttons and removes any pending click release.
+    void reset();
+
    private:
     static void apply_button_action(ButtonAction action, bool& held, bool& release_pending);
 

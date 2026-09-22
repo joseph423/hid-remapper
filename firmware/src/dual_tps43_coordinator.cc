@@ -23,3 +23,8 @@ void DualTps43Coordinator::service(uint64_t now_us) {
 
     action_sink_.apply(processor_.process(snapshot));
 }
+
+void DualTps43Coordinator::reset() {
+    left_tracker_.reset();
+    right_tracker_.reset();
+}
