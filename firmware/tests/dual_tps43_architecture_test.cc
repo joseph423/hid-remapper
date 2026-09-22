@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cstdint>
 #include <stdexcept>
+#include <vector>
 
 #include "dual_tps43_coordinator.h"
 
@@ -181,6 +182,140 @@ class AcquisitionHarness {
     DualTps43Coordinator coordinator_{ left, right, fsm_, sink_ };
 };
 
+struct ServiceOrderStep {
+    Tps43Sample left;
+    Tps43Sample right;
+    uint64_t now_us;
+};
+
+Tps43Sample with_timestamp(Tps43Sample sample, uint64_t timestamp_us) {
+    sample.timestamp_us = timestamp_us;
+    return sample;
+}
+
+class CoordinatorFsmHarness {
+   public:
+    explicit CoordinatorFsmHarness(bool service_right_first)
+        : coordinator_(left, right, fsm_, sink_, service_right_first) {
+    }
+
+    LogicalActions step(const ServiceOrderStep& step) {
+        left.set_next_sample(step.left);
+        right.set_next_sample(step.right);
+        coordinator_.service(step.now_us);
+        return sink_.last_actions;
+    }
+
+   private:
+    MockTps43Driver left;
+    MockTps43Driver right;
+    DualTps43Fsm fsm_{ acquisition_tuning() };
+    RecordingActionSink sink_;
+    DualTps43Coordinator coordinator_;
+};
+
+void require_same_actions(const LogicalActions& left_first, const LogicalActions& right_first, const char* scenario) {
+    require(left_first.cursor_x == right_first.cursor_x && left_first.cursor_y == right_first.cursor_y &&
+            left_first.scroll_x == right_first.scroll_x && left_first.scroll_y == right_first.scroll_y &&
+            left_first.left_button == right_first.left_button && left_first.right_button == right_first.right_button,
+        scenario);
+}
+
+void verify_service_order_sequence(const char* scenario, const std::vector<ServiceOrderStep>& steps) {
+    CoordinatorFsmHarness left_first(false);
+    CoordinatorFsmHarness right_first(true);
+    for (const ServiceOrderStep& step : steps) {
+        require_same_actions(left_first.step(step), right_first.step(step), scenario);
+    }
+}
+
+void verify_service_order_pad37() {
+    for (bool right_first_touch : { false, true }) {
+        for (bool reports_tap : { false, true }) {
+            std::vector<ServiceOrderStep> steps;
+            steps.push_back({
+                with_timestamp(right_first_touch ? Tps43Sample{} : compact_sample(true, 1, 0, 0, 0), 100),
+                with_timestamp(right_first_touch ? compact_sample(true, 1, 0, 0, 0) : Tps43Sample{}, 100), 100 });
+            steps.push_back({
+                with_timestamp(right_first_touch ? Tps43Sample{} : compact_sample(true, 1, 0, 0, 0), 300),
+                with_timestamp(right_first_touch ? compact_sample(true, 1, 0, 0, 0) : Tps43Sample{}, 300), 300 });
+            steps.push_back({ compact_sample(true, 1, 0, 0, 400), compact_sample(true, 1, 0, 0, 400), 400 });
+            const Tps43Sample release = reports_tap ? Tps43Sample { false, 0, 0, 0, false, true } : Tps43Sample {};
+            steps.push_back({
+                with_timestamp(right_first_touch ? compact_sample(true, 1, 0, 0, 0) : release, 700),
+                with_timestamp(right_first_touch ? release : compact_sample(true, 1, 0, 0, 0), 700), 700 });
+            steps.push_back({
+                with_timestamp(right_first_touch ? Tps43Sample { false, 0, 0, 0, false, true } : Tps43Sample{}, 800),
+                with_timestamp(right_first_touch ? Tps43Sample{} : Tps43Sample { false, 0, 0, 0, false, true }, 800), 800 });
+            verify_service_order_sequence("PAD-37 service order changed logical actions", steps);
+        }
+    }
+}
+
+std::vector<ServiceOrderStep> pad38_prefix() {
+    return {
+        { with_timestamp(Tps43Sample{}, 100), with_timestamp(compact_sample(true, 1, 0, 0, 0), 100), 100 },
+        { with_timestamp(Tps43Sample{}, 300), with_timestamp(compact_sample(true, 1, 0, 0, 0), 300), 300 },
+        { compact_sample(true, 1, 0, 0, 400), compact_sample(true, 1, 0, 0, 400), 400 },
+        { compact_sample(true, 1, 0, 0, 700), with_timestamp(Tps43Sample { false, 0, 0, 0, false, true }, 700), 700 },
+    };
+}
+
+void verify_service_order_pad38() {
+    for (int followup = 0; followup < 4; followup++) {
+        std::vector<ServiceOrderStep> steps = pad38_prefix();
+        if (followup == 0) {
+            steps.push_back({ compact_sample(true, 1, 0, 0, 800), compact_sample(true, 1, 0, 0, 800), 800 });
+            steps.push_back({ compact_sample(true, 1, 0, 0, 900), with_timestamp(Tps43Sample { false, 0, 0, 0, false, true }, 900), 900 });
+            steps.push_back({ with_timestamp(Tps43Sample {}, 1000), with_timestamp(Tps43Sample {}, 1000), 1000 });
+        } else if (followup == 1) {
+            steps.push_back({ compact_sample(true, 1, 0, 0, 800), compact_sample(true, 1, 2, 1, 800), 800 });
+            steps.push_back({ with_timestamp(Tps43Sample {}, 900), compact_sample(true, 1, 0, 0, 900), 900 });
+        } else if (followup == 2) {
+            steps.push_back({ compact_sample(true, 1, 0, 2, 800), with_timestamp(Tps43Sample {}, 800), 800 });
+            steps.push_back({ compact_sample(true, 1, 0, 0, 900), compact_sample(true, 1, 0, 0, 900), 900 });
+            steps.push_back({ compact_sample(true, 1, 0, 0, 1000), with_timestamp(Tps43Sample { false, 0, 0, 0, false, true }, 1000), 1000 });
+            steps.push_back({ compact_sample(true, 1, 0, 1, 1100), with_timestamp(Tps43Sample {}, 1100), 1100 });
+        } else {
+            steps.push_back({ compact_sample(true, 1, 0, 2, 800), with_timestamp(Tps43Sample {}, 800), 800 });
+            steps.push_back({ compact_sample(true, 1, 0, 1, 900), compact_sample(true, 1, 2, 0, 900), 900 });
+        }
+        verify_service_order_sequence("PAD-38 service order changed logical actions", steps);
+    }
+
+    std::vector<ServiceOrderStep> mirror_steps = {
+        { compact_sample(true, 1, 0, 0, 100), with_timestamp(Tps43Sample {}, 100), 100 },
+        { compact_sample(true, 1, 0, 0, 300), with_timestamp(Tps43Sample {}, 300), 300 },
+        { compact_sample(true, 1, 0, 0, 400), compact_sample(true, 1, 0, 0, 400), 400 },
+        { with_timestamp(Tps43Sample { false, 0, 0, 0, false, true }, 700), compact_sample(true, 1, 0, 0, 700), 700 },
+    };
+    for (int tap = 0; tap < 2; tap++) {
+        mirror_steps.push_back({ compact_sample(true, 1, 0, 0, 800 + tap * 200), compact_sample(true, 1, 0, 0, 800 + tap * 200),
+            static_cast<uint64_t>(800 + tap * 200) });
+        mirror_steps.push_back({ with_timestamp(Tps43Sample { false, 0, 0, 0, false, true }, 900 + tap * 200),
+            compact_sample(true, 1, 0, 0, 900 + tap * 200), static_cast<uint64_t>(900 + tap * 200) });
+    }
+    mirror_steps.push_back({ with_timestamp(Tps43Sample {}, 1300), with_timestamp(Tps43Sample { false, 0, 0, 0, false, true }, 1300), 1300 });
+    verify_service_order_sequence("PAD-38 mirror service order changed logical actions", mirror_steps);
+}
+
+void verify_service_order_pad39() {
+    verify_service_order_sequence("PAD-39 stationary service order changed logical actions", {
+        { compact_sample(true, 1, 0, 0, 100), with_timestamp(Tps43Sample {}, 100), 100 },
+        { compact_sample(true, 1, 0, 0, 300), with_timestamp(Tps43Sample {}, 300), 300 },
+        { compact_sample(true, 1, 0, 0, 400), compact_sample(true, 1, 0, 0, 400), 400 },
+        { with_timestamp(Tps43Sample {}, 450), compact_sample(true, 1, 0, 0, 450), 450 },
+        { with_timestamp(Tps43Sample {}, 550), with_timestamp(Tps43Sample { false, 0, 0, 0, false, true }, 550), 550 },
+    });
+    verify_service_order_sequence("PAD-39 movement service order changed logical actions", {
+        { compact_sample(true, 1, 0, 0, 100), with_timestamp(Tps43Sample {}, 100), 100 },
+        { compact_sample(true, 1, 0, 0, 300), with_timestamp(Tps43Sample {}, 300), 300 },
+        { compact_sample(true, 1, 0, 0, 400), compact_sample(true, 1, 0, 0, 400), 400 },
+        { with_timestamp(Tps43Sample { false, 0, 0, 0, false, true }, 700), compact_sample(true, 1, 0, 0, 700), 700 },
+        { with_timestamp(Tps43Sample {}, 800), compact_sample(true, 1, 2, 0, 800), 800 },
+    });
+}
+
 void verify_motion_acquisition_timing() {
     AcquisitionHarness sparse, extra_ticks;
     for (AcquisitionHarness* harness : { &sparse, &extra_ticks }) {
@@ -270,6 +405,9 @@ int main() {
     verify_motion_acquisition_timing();
     verify_scroll_gaps_and_stationary_intent();
     verify_service_order_equivalence();
+    verify_service_order_pad37();
+    verify_service_order_pad38();
+    verify_service_order_pad39();
     MockTps43Driver left_driver;
     MockTps43Driver right_driver;
     RecordingProcessor processor;
