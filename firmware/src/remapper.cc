@@ -2173,7 +2173,10 @@ void parse_our_descriptor() {
 }
 
 void print_stats() {
-    printf("%lu %lu %lu\n", reports_received, reports_sent, processing_time);
+#ifdef TPS43_PRINT_STATS
+    printf("remapper_stats reports_received=%lu reports_sent=%lu processing_time_us=%lu\n",
+        reports_received, reports_sent, processing_time);
+#endif
     reports_received = 0;
     reports_sent = 0;
     processing_time = 0;

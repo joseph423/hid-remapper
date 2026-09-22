@@ -60,6 +60,11 @@ add_executable(remapper
 set(TPS43_NORMAL_CAPTURE_TRACE_CAPACITY "1" CACHE STRING "Retained normal-capture rows per source")
 target_compile_definitions(remapper PRIVATE TPS43_NORMAL_CAPTURE_TRACE_CAPACITY=${TPS43_NORMAL_CAPTURE_TRACE_CAPACITY})
 
+option(TPS43_PRINT_STATS "Print generic Remapper performance statistics on the CDC serial stream" OFF)
+if(TPS43_PRINT_STATS)
+target_compile_definitions(remapper PRIVATE TPS43_PRINT_STATS=1)
+endif()
+
 if((PICO_BOARD STREQUAL "pico") OR (PICO_BOARD STREQUAL "pico2"))
 target_compile_definitions(remapper PUBLIC PICO_DEFAULT_UART_TX_PIN=16)
 target_compile_definitions(remapper PUBLIC PICO_DEFAULT_UART_RX_PIN=17)
