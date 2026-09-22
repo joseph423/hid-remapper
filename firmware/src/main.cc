@@ -53,7 +53,7 @@ namespace {
 // Phase 10's clean behavior-validation profile. It keeps the approved gesture
 // thresholds but removes velocity-dependent feel and post-release scroll
 // momentum so physical FSM validation observes only the active input path.
-DualTps43Tuning phase10_provisional_tuning() {
+DualTps43Tuning production_tuning() {
     DualTps43Tuning tuning;
     tuning.tap_max_duration_us = 200000;
     // Keep stationary intent below the tap limit so the specified
@@ -73,7 +73,7 @@ DualTps43Tuning phase10_provisional_tuning() {
 
 Tps43Iqs5xxDriver right_tps43_driver({ i2c0, 0x74, 4, 5, 8, 400000 });
 Tps43Iqs5xxDriver left_tps43_driver({ i2c1, 0x74, 6, 7, 9, 400000 });
-DualTps43Fsm tps43_processor(phase10_provisional_tuning());
+DualTps43Fsm tps43_processor(production_tuning());
 Tps43RemapperActionSink tps43_action_sink;
 DualTps43Coordinator tps43_coordinator(
     left_tps43_driver,
