@@ -11,7 +11,7 @@ PRODUCT_ID = 0xBAF2
 CONFIG_USAGE_PAGE = 0xFF00
 CONFIG_USAGE = 0x0020
 
-CONFIG_VERSION = 18
+CONFIG_VERSION = 19
 CONFIG_SIZE = 32
 REPORT_ID_CONFIG = 100
 
@@ -20,6 +20,15 @@ DEFAULT_TAP_HOLD_THRESHOLD = 200000
 DEFAULT_GPIO_DEBOUNCE_TIME = 5
 DEFAULT_SCALING = 1000
 DEFAULT_MACRO_ENTRY_DURATION = 1
+
+DEFAULT_TPS43_TUNING = {
+    "tap_max_duration_ms": 200,
+    "stationary_intent_threshold_ms": 100,
+    "neutral_activation_threshold": 20,
+    "left_assisted_drag_axis_threshold": 2,
+    "cursor_base_scale_q8": 128,
+    "scroll_base_scale_q8": 4,
+}
 
 NLAYERS = 8
 
@@ -48,6 +57,8 @@ SET_MONITOR_ENABLED = 22
 CLEAR_QUIRKS = 23
 ADD_QUIRK = 24
 GET_QUIRK = 25
+GET_TPS43_TUNING = 26
+SET_TPS43_TUNING = 27
 
 PERSIST_CONFIG_SUCCESS = 1
 PERSIST_CONFIG_CONFIG_TOO_BIG = 2

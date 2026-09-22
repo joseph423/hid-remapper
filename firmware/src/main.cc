@@ -382,6 +382,10 @@ int main() {
             set_mapping_from_config();
             config_updated = false;
         }
+        if (tps43_tuning_updated) {
+            tps43_tuning_updated = false;
+            apply_configured_tps43_tuning();
+        }
         if (set_gpio_dir_pending && !suspended) {
             set_gpio_dir();
             set_gpio_dir_pending = false;

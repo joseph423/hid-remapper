@@ -37,6 +37,17 @@ gpio_output_mode = config.get("gpio_output_mode", 0)
 normalize_gamepad_inputs = (
     config.get("normalize_gamepad_inputs", True) if version >= 18 else False
 )
+tps43_tuning = {**DEFAULT_TPS43_TUNING, **config.get("tps43_tuning", {})}
+if (
+    tps43_tuning["tap_max_duration_ms"] <= 0
+    or tps43_tuning["stationary_intent_threshold_ms"] <= 0
+    or tps43_tuning["stationary_intent_threshold_ms"] >= tps43_tuning["tap_max_duration_ms"]
+    or tps43_tuning["neutral_activation_threshold"] < 0
+    or tps43_tuning["left_assisted_drag_axis_threshold"] <= 0
+    or tps43_tuning["cursor_base_scale_q8"] < 0
+    or tps43_tuning["scroll_base_scale_q8"] < 0
+):
+    raise Exception("Invalid TPS43 runtime tuning.")
 
 flags = 0
 flags |= IGNORE_AUTH_DEV_INPUTS_FLAG if ignore_auth_dev_inputs else 0
@@ -57,6 +68,22 @@ data = struct.pack(
     our_descriptor_number,
     macro_entry_duration,
     *([0] * 12)
+)
+device.send_feature_report(add_crc(data))
+
+data = struct.pack(
+    "<BBBLLllll2B",
+    REPORT_ID_CONFIG,
+    CONFIG_VERSION,
+    SET_TPS43_TUNING,
+    tps43_tuning["tap_max_duration_ms"],
+    tps43_tuning["stationary_intent_threshold_ms"],
+    tps43_tuning["neutral_activation_threshold"],
+    tps43_tuning["left_assisted_drag_axis_threshold"],
+    tps43_tuning["cursor_base_scale_q8"],
+    tps43_tuning["scroll_base_scale_q8"],
+    0,
+    0,
 )
 device.send_feature_report(add_crc(data))
 

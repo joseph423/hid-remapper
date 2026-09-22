@@ -51,6 +51,30 @@ config = {
     "quirks": [],
 }
 
+data = struct.pack("<BBB26B", REPORT_ID_CONFIG, CONFIG_VERSION, GET_TPS43_TUNING, *([0] * 26))
+device.send_feature_report(add_crc(data))
+data = get_feature_report(device, REPORT_ID_CONFIG, CONFIG_SIZE + 1)
+(
+    report_id,
+    tap_max_duration_ms,
+    stationary_intent_threshold_ms,
+    neutral_activation_threshold,
+    left_assisted_drag_axis_threshold,
+    cursor_base_scale_q8,
+    scroll_base_scale_q8,
+    *_reserved,
+    crc,
+) = struct.unpack("<BLLllll4BL", data)
+check_crc(data, crc)
+config["tps43_tuning"] = {
+    "tap_max_duration_ms": tap_max_duration_ms,
+    "stationary_intent_threshold_ms": stationary_intent_threshold_ms,
+    "neutral_activation_threshold": neutral_activation_threshold,
+    "left_assisted_drag_axis_threshold": left_assisted_drag_axis_threshold,
+    "cursor_base_scale_q8": cursor_base_scale_q8,
+    "scroll_base_scale_q8": scroll_base_scale_q8,
+}
+
 for i in range(mapping_count):
     data = struct.pack(
         "<BBBL22B", REPORT_ID_CONFIG, CONFIG_VERSION, GET_MAPPING, i, *([0] * 22)

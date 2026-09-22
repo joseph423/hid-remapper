@@ -32,6 +32,8 @@ enum class ConfigCommand : int8_t {
     CLEAR_QUIRKS = 23,
     ADD_QUIRK = 24,
     GET_QUIRK = 25,
+    GET_TPS43_TUNING = 26,
+    SET_TPS43_TUNING = 27,
 };
 
 struct usage_def_t {
@@ -345,6 +347,18 @@ struct __attribute__((packed)) set_config_t {
     uint8_t our_descriptor_number;
     uint8_t macro_entry_duration;
 };
+
+// Safe runtime-editable TPS43 controls. Durations use milliseconds on the HID
+// wire; motion scales use Q8 fixed point, where 256 means 1.0x.
+struct __attribute__((packed)) tps43_runtime_tuning_t {
+    uint32_t tap_max_duration_ms;
+    uint32_t stationary_intent_threshold_ms;
+    int32_t neutral_activation_threshold;
+    int32_t left_assisted_drag_axis_threshold;
+    int32_t cursor_base_scale_q8;
+    int32_t scroll_base_scale_q8;
+};
+static_assert(sizeof(tps43_runtime_tuning_t) == 24);
 
 struct __attribute__((packed)) get_indexed_t {
     uint32_t requested_index;

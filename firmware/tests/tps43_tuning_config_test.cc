@@ -75,5 +75,28 @@ int main() {
     assert(!validate_tps43_tuning(invalid));
     assert(!encode_tps43_tuning(invalid, buffer, sizeof(buffer)));
 
+    tps43_runtime_tuning_t controls = {};
+    assert(get_configured_tps43_runtime_tuning(&controls));
+    controls.tap_max_duration_ms = 250;
+    controls.stationary_intent_threshold_ms = 125;
+    controls.neutral_activation_threshold = 24;
+    controls.left_assisted_drag_axis_threshold = 3;
+    controls.cursor_base_scale_q8 = 192;
+    controls.scroll_base_scale_q8 = 8;
+    assert(set_configured_tps43_runtime_tuning(controls));
+    const DualTps43Tuning updated = configured_tps43_tuning();
+    assert(updated.tap_max_duration_us == 250000);
+    assert(updated.stationary_intent_threshold_us == 125000);
+    assert(updated.neutral_activation_threshold == 24);
+    assert(updated.left_assisted_drag_axis_threshold == 3);
+    assert(updated.cursor_gain.minimum_gain_q8 == 192 && updated.cursor_gain.maximum_gain_q8 == 192);
+    assert(updated.scroll_gain.minimum_gain_q8 == 8 && updated.scroll_gain.maximum_gain_q8 == 8);
+    assert(updated.scroll_momentum.release_velocity_filter_weight_q8 == 0);
+
+    const DualTps43Tuning before_invalid = updated;
+    controls.stationary_intent_threshold_ms = controls.tap_max_duration_ms;
+    assert(!set_configured_tps43_runtime_tuning(controls));
+    assert_equal(before_invalid, configured_tps43_tuning());
+
     return 0;
 }

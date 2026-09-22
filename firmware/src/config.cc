@@ -869,6 +869,12 @@ uint16_t handle_get_report1(uint8_t report_id, uint8_t* buffer, uint16_t reqlen)
                 fill_get_config((get_config_t*) config_buffer);
                 break;
             }
+            case ConfigCommand::GET_TPS43_TUNING: {
+                if (!get_configured_tps43_runtime_tuning((tps43_runtime_tuning_t*) config_buffer->data)) {
+                    return 0;
+                }
+                break;
+            }
             case ConfigCommand::GET_MAPPING: {
                 mapping_config11_t* mapping_config = (mapping_config11_t*) config_buffer;
                 if (requested_index < config_mappings.size()) {
@@ -1015,6 +1021,15 @@ void handle_set_report1(uint8_t report_id, uint8_t const* buffer, uint16_t bufsi
                         our_descriptor_number = 0;
                     }
                     macro_entry_duration = config->macro_entry_duration;
+                    break;
+                }
+                case ConfigCommand::SET_TPS43_TUNING: {
+                    const tps43_runtime_tuning_t* controls = (const tps43_runtime_tuning_t*) config_buffer->data;
+                    if (set_configured_tps43_runtime_tuning(*controls)) {
+                        tps43_tuning_updated = true;
+                    } else {
+                        printf("invalid TPS43 runtime tuning; retaining previous profile\n");
+                    }
                     break;
                 }
                 case ConfigCommand::GET_CONFIG:

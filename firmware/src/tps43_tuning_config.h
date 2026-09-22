@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "dual_tps43_fsm.h"
+#include "types.h"
 
 // The block is serialized field-by-field in little-endian order. It must not
 // depend on C++ structure padding or compiler ABI details.
@@ -35,5 +36,13 @@ bool encode_tps43_tuning(const DualTps43Tuning& tuning, uint8_t* buffer, std::si
 // Decodes and validates one complete tuning block. The destination is not
 // modified when the header, size, or tuning values are invalid.
 bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps43Tuning* tuning);
+
+// Copies the safe runtime-editable subset into the HID protocol structure.
+bool get_configured_tps43_runtime_tuning(tps43_runtime_tuning_t* controls);
+
+// Updates only the safe runtime-editable subset, preserving hidden velocity
+// filters and momentum settings. Returns false without changing the profile
+// when the resulting full tuning is invalid.
+bool set_configured_tps43_runtime_tuning(const tps43_runtime_tuning_t& controls);
 
 #endif

@@ -22,6 +22,7 @@ volatile bool their_descriptor_updated = false;
 volatile bool suspended = false;
 volatile bool resume_pending = false;
 volatile bool config_updated = false;
+volatile bool tps43_tuning_updated = false;
 
 uint8_t unmapped_passthrough_layer_mask = 0b11111111;
 uint32_t partial_scroll_timeout = 1000000;

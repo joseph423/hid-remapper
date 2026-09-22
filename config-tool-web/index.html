@@ -137,6 +137,62 @@
                         </div>
                     </div>
                 </div>
+                <h5 class="mt-4">TPS43 touchpad tuning</h5>
+                <p class="text-muted">Changes apply immediately to the TPS43 gesture engine and are saved with the configuration. Base scales use Q8 units: 256 = 1.0x.</p>
+                <div class="row mt-3">
+                    <div class="col-4 text-end">
+                        <label for="tps43_tap_max_duration_input" class="col-form-label">Tap duration</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="1" id="tps43_tap_max_duration_input" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">ms</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3">
+                    <div class="col-4 text-end">
+                        <label for="tps43_stationary_intent_threshold_input" class="col-form-label">Stationary intent threshold</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="1" id="tps43_stationary_intent_threshold_input" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">ms</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3">
+                    <div class="col-4 text-end">
+                        <label for="tps43_neutral_activation_threshold_input" class="col-form-label">Neutral activation threshold</label>
+                    </div>
+                    <div class="col-auto">
+                        <input type="number" min="0" id="tps43_neutral_activation_threshold_input" class="form-control text-end" style="max-width: 100px;">
+                    </div>
+                </div>
+                <div class="row mt-3">
+                    <div class="col-4 text-end">
+                        <label for="tps43_drag_threshold_input" class="col-form-label">Left-assisted Drag axis threshold</label>
+                    </div>
+                    <div class="col-auto">
+                        <input type="number" min="1" id="tps43_drag_threshold_input" class="form-control text-end" style="max-width: 100px;">
+                    </div>
+                </div>
+                <div class="row mt-3">
+                    <div class="col-4 text-end">
+                        <label for="tps43_cursor_base_scale_input" class="col-form-label">Cursor base scale</label>
+                    </div>
+                    <div class="col-auto">
+                        <input type="number" min="0" id="tps43_cursor_base_scale_input" class="form-control text-end" style="max-width: 100px;">
+                    </div>
+                </div>
+                <div class="row mt-3">
+                    <div class="col-4 text-end">
+                        <label for="tps43_scroll_base_scale_input" class="col-form-label">Scroll base scale</label>
+                    </div>
+                    <div class="col-auto">
+                        <input type="number" min="0" id="tps43_scroll_base_scale_input" class="form-control text-end" style="max-width: 100px;">
+                    </div>
+                </div>
                 <div class="row mt-3">
                     <div class="col-4 text-end">
                         <label for="gpio_debounce_time_input" class="col-form-label">GPIO debounce time</label>

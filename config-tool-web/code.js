@@ -8,7 +8,7 @@ const STICKY_FLAG = 1 << 0;
 const TAP_FLAG = 1 << 1;
 const HOLD_FLAG = 1 << 2;
 const CONFIG_SIZE = 32;
-const CONFIG_VERSION = 18;
+const CONFIG_VERSION = 19;
 const VENDOR_ID = 0xCAFE;
 const PRODUCT_ID = 0xBAF2;
 const DEFAULT_PARTIAL_SCROLL_TIMEOUT = 1000000;
@@ -16,6 +16,14 @@ const DEFAULT_TAP_HOLD_THRESHOLD = 200000;
 const DEFAULT_GPIO_DEBOUNCE_TIME = 5;
 const DEFAULT_SCALING = 1000;
 const DEFAULT_MACRO_ENTRY_DURATION = 1;
+const DEFAULT_TPS43_TUNING = {
+    'tap_max_duration_ms': 200,
+    'stationary_intent_threshold_ms': 100,
+    'neutral_activation_threshold': 20,
+    'left_assisted_drag_axis_threshold': 2,
+    'cursor_base_scale_q8': 128,
+    'scroll_base_scale_q8': 4,
+};
 
 const NLAYERS = 8;
 const NMACROS = 32;
@@ -60,6 +68,8 @@ const SET_MONITOR_ENABLED = 22;
 const CLEAR_QUIRKS = 23;
 const ADD_QUIRK = 24;
 const GET_QUIRK = 25;
+const GET_TPS43_TUNING = 26;
+const SET_TPS43_TUNING = 27;
 
 const PERSIST_CONFIG_SUCCESS = 1;
 const PERSIST_CONFIG_CONFIG_TOO_BIG = 2;
@@ -148,6 +158,7 @@ let config = {
     'gpio_output_mode': 0,
     'input_labels': 0,
     'normalize_gamepad_inputs': true,
+    'tps43_tuning': structuredClone(DEFAULT_TPS43_TUNING),
     mappings: [{
         'source_usage': '0x00000000',
         'target_usage': '0x00000000',
@@ -198,6 +209,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
     document.getElementById("partial_scroll_timeout_input").addEventListener("change", partial_scroll_timeout_onchange);
     document.getElementById("tap_hold_threshold_input").addEventListener("change", tap_hold_threshold_onchange);
+    document.getElementById("tps43_tap_max_duration_input").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_stationary_intent_threshold_input").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_neutral_activation_threshold_input").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_drag_threshold_input").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_cursor_base_scale_input").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_scroll_base_scale_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("gpio_debounce_time_input").addEventListener("change", gpio_debounce_time_onchange);
     document.getElementById("macro_entry_duration_input").addEventListener("change", macro_entry_duration_onchange);
     for (let i = 0; i < NLAYERS; i++) {
@@ -306,6 +323,19 @@ async function load_from_device() {
         config['normalize_gamepad_inputs'] = !!(flags & NORMALIZE_GAMEPAD_INPUTS_FLAG);
         config['macro_entry_duration'] = macro_entry_duration + 1;
         config['mappings'] = [];
+
+        await send_feature_command(GET_TPS43_TUNING);
+        const [tap_max_duration_ms, stationary_intent_threshold_ms, neutral_activation_threshold,
+            left_assisted_drag_axis_threshold, cursor_base_scale_q8, scroll_base_scale_q8] =
+            await read_config_feature([UINT32, UINT32, INT32, INT32, INT32, INT32]);
+        config['tps43_tuning'] = {
+            tap_max_duration_ms,
+            stationary_intent_threshold_ms,
+            neutral_activation_threshold,
+            left_assisted_drag_axis_threshold,
+            cursor_base_scale_q8,
+            scroll_base_scale_q8,
+        };
 
         for (let i = 0; i < mapping_count; i++) {
             await send_feature_command(GET_MAPPING, [[UINT32, i]]);
@@ -452,6 +482,18 @@ async function save_to_device() {
             [UINT8, config['gpio_debounce_time_ms']],
             [UINT8, config['our_descriptor_number']],
             [UINT8, config['macro_entry_duration'] - 1],
+        ]);
+        const tps43_tuning = config['tps43_tuning'];
+        if (tps43_tuning['stationary_intent_threshold_ms'] >= tps43_tuning['tap_max_duration_ms']) {
+            throw new Error('Stationary intent threshold must be shorter than tap duration.');
+        }
+        await send_feature_command(SET_TPS43_TUNING, [
+            [UINT32, tps43_tuning['tap_max_duration_ms']],
+            [UINT32, tps43_tuning['stationary_intent_threshold_ms']],
+            [INT32, tps43_tuning['neutral_activation_threshold']],
+            [INT32, tps43_tuning['left_assisted_drag_axis_threshold']],
+            [INT32, tps43_tuning['cursor_base_scale_q8']],
+            [INT32, tps43_tuning['scroll_base_scale_q8']],
         ]);
         await send_feature_command(CLEAR_MAPPING);
 
@@ -632,6 +674,13 @@ function set_config_ui_state() {
     document.getElementById('input_labels_dropdown').value = config['input_labels'];
     document.getElementById('input_labels_modal_dropdown').value = config['input_labels'];
     document.getElementById('normalize_gamepad_inputs_checkbox').checked = config['normalize_gamepad_inputs'];
+    const tps43_tuning = config['tps43_tuning'];
+    document.getElementById('tps43_tap_max_duration_input').value = tps43_tuning['tap_max_duration_ms'];
+    document.getElementById('tps43_stationary_intent_threshold_input').value = tps43_tuning['stationary_intent_threshold_ms'];
+    document.getElementById('tps43_neutral_activation_threshold_input').value = tps43_tuning['neutral_activation_threshold'];
+    document.getElementById('tps43_drag_threshold_input').value = tps43_tuning['left_assisted_drag_axis_threshold'];
+    document.getElementById('tps43_cursor_base_scale_input').value = tps43_tuning['cursor_base_scale_q8'];
+    document.getElementById('tps43_scroll_base_scale_input').value = tps43_tuning['scroll_base_scale_q8'];
 }
 
 function set_mappings_ui_state() {
@@ -763,6 +812,9 @@ function set_ui_state() {
         // Normalize gamepad inputs defaults to true, but if we're loading a <18 config,
         // set it to false to preserve previous behavior.
         config['normalize_gamepad_inputs'] = false;
+    }
+    if (config['tps43_tuning'] === undefined) {
+        config['tps43_tuning'] = structuredClone(DEFAULT_TPS43_TUNING);
     }
     if (config['version'] < CONFIG_VERSION) {
         config['version'] = CONFIG_VERSION;
@@ -989,7 +1041,7 @@ function add_crc(data) {
 }
 
 function check_json_version(config_version) {
-    if (!([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(config_version))) {
+    if (!([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].includes(config_version))) {
         throw new Error("Incompatible version.");
     }
 }
@@ -1387,6 +1439,25 @@ function tap_hold_threshold_onchange() {
         value = Math.round(value * 1000);
     }
     config['tap_hold_threshold'] = value;
+}
+
+function tps43_tuning_onchange() {
+    const fields = [
+        ['tap_max_duration_ms', 'tps43_tap_max_duration_input', 1],
+        ['stationary_intent_threshold_ms', 'tps43_stationary_intent_threshold_input', 1],
+        ['neutral_activation_threshold', 'tps43_neutral_activation_threshold_input', 0],
+        ['left_assisted_drag_axis_threshold', 'tps43_drag_threshold_input', 1],
+        ['cursor_base_scale_q8', 'tps43_cursor_base_scale_input', 0],
+        ['scroll_base_scale_q8', 'tps43_scroll_base_scale_input', 0],
+    ];
+    for (const [key, element_id, minimum] of fields) {
+        let value = parseInt(document.getElementById(element_id).value, 10);
+        if (isNaN(value) || value < minimum) {
+            value = DEFAULT_TPS43_TUNING[key];
+            document.getElementById(element_id).value = value;
+        }
+        config['tps43_tuning'][key] = value;
+    }
 }
 
 function gpio_debounce_time_onchange() {

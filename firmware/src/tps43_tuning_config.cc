@@ -197,3 +197,36 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
     *tuning = decoded;
     return true;
 }
+
+bool get_configured_tps43_runtime_tuning(tps43_runtime_tuning_t* controls) {
+    if (controls == nullptr) {
+        return false;
+    }
+
+    const DualTps43Tuning tuning = configured_tps43_tuning();
+    controls->tap_max_duration_ms = static_cast<uint32_t>(tuning.tap_max_duration_us / 1000);
+    controls->stationary_intent_threshold_ms = static_cast<uint32_t>(tuning.stationary_intent_threshold_us / 1000);
+    controls->neutral_activation_threshold = tuning.neutral_activation_threshold;
+    controls->left_assisted_drag_axis_threshold = tuning.left_assisted_drag_axis_threshold;
+    controls->cursor_base_scale_q8 = tuning.cursor_gain.minimum_gain_q8;
+    controls->scroll_base_scale_q8 = tuning.scroll_gain.minimum_gain_q8;
+    return true;
+}
+
+bool set_configured_tps43_runtime_tuning(const tps43_runtime_tuning_t& controls) {
+    DualTps43Tuning candidate = configured_tps43_tuning();
+    candidate.tap_max_duration_us = static_cast<uint64_t>(controls.tap_max_duration_ms) * 1000;
+    candidate.stationary_intent_threshold_us = static_cast<uint64_t>(controls.stationary_intent_threshold_ms) * 1000;
+    candidate.neutral_activation_threshold = controls.neutral_activation_threshold;
+    candidate.left_assisted_drag_axis_threshold = controls.left_assisted_drag_axis_threshold;
+    candidate.cursor_gain.minimum_gain_q8 = controls.cursor_base_scale_q8;
+    candidate.cursor_gain.maximum_gain_q8 = controls.cursor_base_scale_q8;
+    candidate.scroll_gain.minimum_gain_q8 = controls.scroll_base_scale_q8;
+    candidate.scroll_gain.maximum_gain_q8 = controls.scroll_base_scale_q8;
+    if (!validate_tps43_tuning(candidate)) {
+        return false;
+    }
+
+    set_configured_tps43_tuning(candidate);
+    return true;
+}
