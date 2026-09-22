@@ -93,3 +93,14 @@ target_compile_options(tps43_capture_commands_test PRIVATE -Wall -Wextra -Werror
 target_compile_definitions(tps43_capture_commands_test PRIVATE TPS43_NORMAL_CAPTURE_TRACE_CAPACITY=512)
 target_include_directories(tps43_capture_commands_test PRIVATE fake_pico ../src)
 add_test(NAME tps43_capture_commands_test COMMAND tps43_capture_commands_test)
+
+add_executable(tps43_tuning_config_test
+    tps43_tuning_config_test.cc
+    ../src/tps43_tuning_config.cc
+    ../src/dual_tps43_fsm.cc
+    ../src/pad_state.cc
+)
+target_compile_features(tps43_tuning_config_test PRIVATE cxx_std_17)
+target_compile_options(tps43_tuning_config_test PRIVATE -Wall -Wextra -Werror)
+target_include_directories(tps43_tuning_config_test PRIVATE ../src)
+add_test(NAME tps43_tuning_config_test COMMAND tps43_tuning_config_test)

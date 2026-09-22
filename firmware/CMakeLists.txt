@@ -39,6 +39,7 @@ add_executable(remapper
     src/tps43_timing_processor.cc
     src/tps43_timing_metrics.cc
     src/tps43_timing_capture.cc
+    src/tps43_tuning_config.cc
     src/tps43_cdc_stdio.cc
     src/tps43_hid_adapter.cc
     src/crc.cc

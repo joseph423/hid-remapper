@@ -34,6 +34,7 @@
 #include "tps43_iqs5xx_driver.h"
 #include "tps43_timing_capture.h"
 #include "tps43_timing_metrics.h"
+#include "tps43_tuning_config.h"
 
 // RP2350 UF2s wipe the last sector of flash every time
 // because of RP2350-E10 errata mitigation. So we put
@@ -47,29 +48,6 @@
 #define FLASH_CONFIG_IN_MEMORY (((uint8_t*) XIP_BASE) + CONFIG_OFFSET_IN_FLASH)
 
 #define ADC_USAGE_PAGE 0xFFF80000
-
-namespace {
-
-// Phase 10's clean behavior-validation profile. It keeps the approved gesture
-// thresholds but removes velocity-dependent feel and post-release scroll
-// momentum so physical FSM validation observes only the active input path.
-DualTps43Tuning production_tuning() {
-    DualTps43Tuning tuning;
-    tuning.tap_max_duration_us = 200000;
-    // Keep stationary intent below the tap limit so the specified
-    // stationary-release cases can also report an eligible tap.
-    tuning.stationary_intent_threshold_us = 100000;
-    tuning.neutral_activation_threshold = 20;
-    // Fixed gains keep output magnitude deterministic while preserving usable
-    // cursor and scroll output for the physical behavior matrix.
-    tuning.cursor_gain = { 128, 128, 4000, 256, 15000 };
-    tuning.scroll_gain = { 4, 4, 4000, 256, 15000 };
-    tuning.scroll_momentum = { 0, 0, 0, 0 };
-    tuning.left_assisted_drag_axis_threshold = 2;
-    return tuning;
-}
-
-}  // namespace
 
 Tps43Iqs5xxDriver right_tps43_driver({ i2c0, 0x74, 4, 5, 8, 400000 });
 Tps43Iqs5xxDriver left_tps43_driver({ i2c1, 0x74, 6, 7, 9, 400000 });
