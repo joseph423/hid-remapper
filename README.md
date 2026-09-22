@@ -34,6 +34,19 @@ For details on how to use it, please see the [HID Remapper Manual](https://www.r
 
 If you can't use the browser-based configuration tool, there's also a [command-line tool](config-tool) that takes JSON in the same format as the web tool on standard input. I only tested it on Linux, but in theory it should also run on Windows and Mac.
 
+### Project-local TPS43 configuration tool
+
+The dual-TPS43 firmware in this project uses the project-specific configuration version 19 and TPS43 tuning commands. Use the local tool in this repository; the official online tool does not support these commands.
+
+From the repository root, start a local web server:
+
+```sh
+cd config-tool-web
+python3 -m http.server 8000
+```
+
+Open [http://localhost:8000/](http://localhost:8000/) in Chrome or another Chromium-based browser, click **Open device**, and then use **Load from device** or **Save to device**. Stop the server with `Ctrl-C` when finished. Do not flash or rebuild when changing the exposed TPS43 tuning values; the firmware applies valid saved values at the next main-loop boundary.
+
 ## How to update the firmware
 
 The procedure to update the firmware is similar on all variants. When you go to the configuration website and try to connect to your device when it doesn't have the latest firmware, you will get a message and a link to a version of the configuration interface that is compatible with your current (old) firmware. Click that link, connect to your HID Remapper by clicking "Open device" as usual, then go to the "Actions" tab and click "Flash firmware". This will put your device in firmware flashing mode. A drive should appear on your computer. For all the RP2040-based variants, the drive will be named "RPI-RP2". For the Bluetooth variants, it will be called something else, depending on what board you're using. Download the correct firmware file for your variant (see table below) and copy it to that drive. On custom boards v1, v2, v5, v6 and v7 (dual RP2040 boards), after flashing the firmware you have to disconnect and reconnect your HID Remapper. That's it, you can go back to the regular version of the configuration interface and carry on.
