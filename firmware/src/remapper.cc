@@ -59,7 +59,6 @@ usage_def_t our_dpad_usage;  // only valid if have_dpad is true
 
 std::unordered_map<uint16_t, std::unordered_map<uint8_t, std::vector<usage_usage_def_t>>> their_used_usages;  // dev_addr+interface -> report_id -> (usage, usage_def) vector
 std::unordered_map<uint16_t, std::unordered_map<uint8_t, std::vector<int32_t*>>> array_range_usages;          // dev_addr+interface -> report_id -> input_state ptr vector
-std::unordered_map<uint16_t, std::unordered_map<uint8_t, std::vector<usage_def_t>>> rollover_usages;          // dev_addr+interface -> report_id -> usage_def vector
 
 std::vector<sticky_usage_t> sticky_usages;
 std::vector<tap_hold_sticky_usage_t> tap_sticky_usages;
@@ -1676,10 +1675,30 @@ void handle_received_report(const uint8_t* report, int len, uint16_t interface, 
 }
 
 static inline bool is_rollover(const uint8_t* report, int len, uint16_t interface, uint8_t report_id) {
-    for (auto const& usage_def : rollover_usages[interface][report_id]) {
-        if (usage_def.is_array) {
+    const auto interface_search = their_usages.find(interface);
+    if (interface_search == their_usages.end()) {
+        return false;
+    }
+    const auto report_search = interface_search->second.find(report_id);
+    if (report_search == interface_search->second.end()) {
+        return false;
+    }
+
+    for (auto const& [usage, usage_def] : report_search->second) {
+        const bool is_rollover_scalar = (usage == ROLLOVER_USAGE) && (usage_def.usage_maximum == 0);
+        const bool is_rollover_range = (usage_def.usage_maximum != 0) &&
+                                       (ROLLOVER_USAGE >= usage) &&
+                                       ((ROLLOVER_USAGE - usage) <= usage_def.usage_maximum);
+        if (!is_rollover_scalar && !is_rollover_range) {
+            continue;
+        }
+
+        if (is_rollover_range || usage_def.is_array) {
+            const uint32_t rollover_index = is_rollover_range
+                ? static_cast<uint32_t>(usage_def.logical_minimum + (ROLLOVER_USAGE - usage))
+                : usage_def.index;
             for (unsigned int i = 0; i < usage_def.count; i++) {
-                if (get_bits(report, len, usage_def.bitpos + i * usage_def.size, usage_def.size) == usage_def.index) {
+                if (get_bits(report, len, usage_def.bitpos + i * usage_def.size, usage_def.size) == rollover_index) {
                     return true;
                 }
             }
@@ -1912,7 +1931,6 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
         // may no longer describe the connected device.
         their_used_usages.clear();
         array_range_usages.clear();
-        rollover_usages.clear();
     } else {
         // A configuration save rebuilds pointers into the same attached-device
         // descriptor. Preserve vector capacity from the previous build: the
@@ -1920,7 +1938,6 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
         // these buffers makes the replacement allocation fatal.
         clear_derived_usage_vectors(their_used_usages);
         clear_derived_usage_vectors(array_range_usages);
-        clear_derived_usage_vectors(rollover_usages);
     }
 
     for (auto& [interface, report_id_usage_map] : their_usages) {
@@ -2013,9 +2030,6 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                             .usage_def = usage_def,
                         });
                     }
-                    if (usage == ROLLOVER_USAGE) {
-                        rollover_usages[interface][report_id].push_back(usage_def);
-                    }
                 } else {  // usage_maximum != 0, array range usage
                     if (descriptor_changed) {
                         their_usage_ranges_set.insert(((uint64_t) usage << 32) | usage_def.usage_maximum);
@@ -2033,15 +2047,6 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                             any_used = true;
                             array_range_vector.push_back(state_ptr_n);
                             mark_derivative_state(binary_state_flags, state_ptr_n);
-                        }
-                        if (actual_usage == ROLLOVER_USAGE) {
-                            rollover_usages[interface][report_id].push_back((usage_def_t) {
-                                .size = usage_def.size,
-                                .bitpos = usage_def.bitpos,
-                                .is_array = true,
-                                .index = usage_def.logical_minimum + actual_usage - usage,
-                                .count = usage_def.count,
-                            });
                         }
                     }
                     if (any_used) {
