@@ -97,6 +97,7 @@ std::unordered_map<uint64_t, int32_t*> usage_state_ptr;  // usage -> input_state
 uint32_t used_state_slots = 0;
 
 std::unordered_map<uint32_t, int32_t> accumulated;  // usage -> relative movement, * 1000
+std::array<int64_t, 4> tps43_q8_remainders = {};  // X, Y, wheel, pan; Q8*1000 remainder
 uint8_t layer_state_mask = 1;
 
 std::vector<int32_t*> relative_usages;  // input_state pointers
@@ -1498,6 +1499,8 @@ bool send_report(send_report_t do_send_report) {
             return static_cast<int32_t>(value);
         };
         tps43_normal_capture_note_usb(submission_timestamp_us, sent, axis(0x00010030), axis(0x00010031));
+        tps43_normal_capture_note_scroll_usb(
+            submission_timestamp_us, sent, axis(0x00010038), axis(0x000C0238));
     }
     // A rejected submission must retain movement and button edges for retry.
     if (!sent && our_descriptor == &our_descriptors[our_descriptor_number])
@@ -1825,7 +1828,18 @@ void set_input_state(uint32_t usage, int32_t state_raw, int32_t state_scaled, ui
     }
 }
 
-void inject_tps43_output(int32_t cursor_x, int32_t cursor_y, int32_t scroll_x, int32_t scroll_y, bool left_button_held, bool right_button_held) {
+void inject_tps43_output(
+    int32_t cursor_x, int32_t cursor_y, int32_t scroll_x, int32_t scroll_y,
+    bool left_button_held, bool right_button_held) {
+    inject_tps43_output_q8(
+        static_cast<int64_t>(cursor_x) * 256, static_cast<int64_t>(cursor_y) * 256,
+        static_cast<int64_t>(scroll_x) * 256, static_cast<int64_t>(scroll_y) * 256,
+        left_button_held, right_button_held);
+}
+
+void inject_tps43_output_q8(
+    int64_t cursor_x_q8, int64_t cursor_y_q8, int64_t scroll_x_q8, int64_t scroll_y_q8,
+    bool left_button_held, bool right_button_held) {
     constexpr uint32_t kMouseButton1Usage = 0x00090001;
     constexpr uint32_t kMouseButton2Usage = 0x00090002;
     constexpr uint32_t kMouseXUsage = 0x00010030;
@@ -1833,8 +1847,29 @@ void inject_tps43_output(int32_t cursor_x, int32_t cursor_y, int32_t scroll_x, i
     constexpr uint32_t kMouseWheelUsage = 0x00010038;
     constexpr uint32_t kMousePanUsage = 0x000C0238;
 
-    const auto add_relative = [](uint32_t usage, int32_t value) {
-        if (value == 0) {
+    const auto saturating_multiply = [](int64_t value, int64_t multiplier) {
+        if (value > 0 && value > std::numeric_limits<int64_t>::max() / multiplier) {
+            return std::numeric_limits<int64_t>::max();
+        }
+        if (value < 0 && value < std::numeric_limits<int64_t>::min() / multiplier) {
+            return std::numeric_limits<int64_t>::min();
+        }
+        return value * multiplier;
+    };
+
+    const auto saturating_add = [](int64_t left, int64_t right) {
+        if (right > 0 && left > std::numeric_limits<int64_t>::max() - right) {
+            return std::numeric_limits<int64_t>::max();
+        }
+        if (right < 0 && left < std::numeric_limits<int64_t>::min() - right) {
+            return std::numeric_limits<int64_t>::min();
+        }
+        return left + right;
+    };
+
+    const auto add_relative = [&](uint32_t usage, std::size_t remainder_index,
+                                   int64_t value_q8, bool precise_scroll) {
+        if (value_q8 == 0) {
             return;
         }
 
@@ -1844,8 +1879,17 @@ void inject_tps43_output(int32_t cursor_x, int32_t cursor_y, int32_t scroll_x, i
             return;
         }
 
-        const int64_t updated = static_cast<int64_t>(accumulated[usage]) +
-                                static_cast<int64_t>(value) * 1000;
+        if (precise_scroll &&
+            (resolution_multiplier & resolution_multiplier_masks[usage == kMousePanUsage])) {
+            value_q8 = saturating_multiply(value_q8, RESOLUTION_MULTIPLIER);
+        }
+
+        const int64_t scaled_q8_milli = saturating_multiply(value_q8, 1000);
+        const int64_t total_q8_milli = saturating_add(
+            scaled_q8_milli, tps43_q8_remainders[remainder_index]);
+        const int64_t milli_units = total_q8_milli / 256;
+        tps43_q8_remainders[remainder_index] = total_q8_milli - milli_units * 256;
+        const int64_t updated = static_cast<int64_t>(accumulated[usage]) + milli_units;
         accumulated[usage] = static_cast<int32_t>(std::clamp<int64_t>(updated,
             std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max()));
     };
@@ -1861,14 +1905,21 @@ void inject_tps43_output(int32_t cursor_x, int32_t cursor_y, int32_t scroll_x, i
             search->second.bitpos, search->second.size, pressed ? 1 : 0);
     };
 
-    add_relative(kMouseXUsage, cursor_x);
-    add_relative(kMouseYUsage, cursor_y);
-    add_relative(kMouseWheelUsage, scroll_y);
-    add_relative(kMousePanUsage, scroll_x);
+    add_relative(kMouseXUsage, 0, cursor_x_q8, false);
+    add_relative(kMouseYUsage, 1, cursor_y_q8, false);
+    add_relative(kMouseWheelUsage, 2, scroll_y_q8, true);
+    add_relative(kMousePanUsage, 3, scroll_x_q8, true);
     set_button(kMouseButton1Usage, left_button_held);
     set_button(kMouseButton2Usage, right_button_held);
     const uint64_t metrics_timestamp_us = tps43_runtime_metrics_enabled() ? get_time() : 0;
-    tps43_note_pointer_service(cursor_x != 0 || cursor_y != 0, scroll_x != 0 || scroll_y != 0, metrics_timestamp_us);
+    tps43_note_pointer_service(
+        cursor_x_q8 != 0 || cursor_y_q8 != 0,
+        scroll_x_q8 != 0 || scroll_y_q8 != 0,
+        metrics_timestamp_us);
+}
+
+void reset_tps43_fractional_output() {
+    tps43_q8_remainders.fill(0);
 }
 
 void rlencode(const std::set<uint64_t>& usage_ranges, std::vector<usage_rle_t>& output) {
@@ -2204,6 +2255,7 @@ void print_stats() {
 void reset_state() {
     memset(registers, 0, sizeof(registers));
     accumulated.clear();
+    reset_tps43_fractional_output();
     layer_state_mask = 1;
     frame_counter = 0;
 }

@@ -44,6 +44,8 @@ void test_capture(FILE* output) {
     tps43_normal_capture_note_sample(sample.timestamp_us, sample, false, 5, 2, 3, 400);
     tps43_normal_capture_note_usb(1000200, true, -1, 0);
     tps43_normal_capture_note_usb(1000500, false, -1, 0);
+    tps43_normal_capture_note_scroll_action(1000600, 4, -8);
+    tps43_normal_capture_note_scroll_usb(1000700, true, 1, -2);
     sample.timestamp_us += 1000;
     tps43_normal_capture_note_sample(sample.timestamp_us, sample, true, 5, 2, 3, 500);
     tps43_normal_capture_note_usb(1001200, true, -1, 0);
@@ -57,6 +59,7 @@ void test_capture(FILE* output) {
     assert(text.find("samples=2 usb_attempts=3 usb_failed=1 failures=1 timeouts=1") != std::string::npos);
     assert(text.find("normal_samples intervals=1 mean_us=1000 max_us=1000") != std::string::npos);
     assert(text.find("normal_usb_submitted intervals=1 mean_us=1000 max_us=1000") != std::string::npos);
+    assert(text.find("normal_scroll raw_samples=0 raw_dx=0 raw_dy=0 action_samples=1 action_q8_dx=4 action_q8_dy=-8 usb_attempts=1 usb_successes=1 usb_wheel=1 usb_pan=-2") != std::string::npos);
     assert(text.find("normal_sample t_us=0 dx=-1 dy=0 count=1 flags=1") != std::string::npos);
     assert(text.find("normal_usb t_us=400 dx=-1 dy=0 count=0 flags=0") != std::string::npos);
 }

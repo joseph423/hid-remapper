@@ -446,6 +446,8 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
             actions.cursor_x, actions.cursor_y, snapshot.right.sample_interval_us, tuning_.cursor_gain, cursor_motion_);
         actions.cursor_x = cursor.x;
         actions.cursor_y = cursor.y;
+        actions.cursor_x_q8 = cursor.x_q8;
+        actions.cursor_y_q8 = cursor.y_q8;
     } else if (snapshot.right.fresh_sample) {
         // Velocity history and fractional output must not move the cursor after
         // the normalized input stops.
@@ -476,6 +478,8 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
             scroll_motion_.active_gain);
         actions.scroll_x = scroll.x;
         actions.scroll_y = scroll.y;
+        actions.scroll_x_q8 = scroll.x_q8;
+        actions.scroll_y_q8 = scroll.y_q8;
         update_scroll_release_velocity(scroll);
         return;
     }
@@ -594,8 +598,10 @@ void DualTps43Fsm::apply_scroll_momentum(uint64_t now_us, LogicalActions& action
         scroll_motion_.momentum_velocity_x_q8_per_second, interval_us, 1000000);
     const int64_t y_q8 = multiply_divide_saturated(
         scroll_motion_.momentum_velocity_y_q8_per_second, interval_us, 1000000);
-    // HID-facing actions are integral, so retain sub-unit displacement until
-    // later momentum cycles accumulate enough motion to emit it.
+    // Keep the Q8 displacement for the HID adapter while retaining the
+    // integral projection for existing logical-action consumers.
+    actions.scroll_x_q8 = x_q8;
+    actions.scroll_y_q8 = y_q8;
     actions.scroll_x = q8_axis(x_q8, scroll_motion_.momentum_residual_x_q8);
     actions.scroll_y = q8_axis(y_q8, scroll_motion_.momentum_residual_y_q8);
 }

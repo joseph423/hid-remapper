@@ -168,6 +168,32 @@ int main() {
             "partial active-scroll filtering must retain velocity history across equal fast samples");
     });
 
+    run_case("MOTION-13 fractional-motion-reaches-output-boundary", [] {
+        DualTps43Tuning tuning = motion_tuning();
+        tuning.cursor_gain = { 128, 128, 1000, 256, 10000 };
+        tuning.scroll_gain = { 4, 4, 1000, 256, 10000 };
+        tuning.scroll_momentum = { 0, 0, 0, 0 };
+
+        Harness cursor(tuning);
+        cursor.step(inactive(), one_finger(), 10000);
+        const LogicalActions first_cursor = cursor.step(inactive(), one_finger(1, 0), 10000);
+        const LogicalActions second_cursor = cursor.step(inactive(), one_finger(1, 0), 10000);
+        require(first_cursor.cursor_x == 0 && first_cursor.cursor_x_q8 == 128,
+            "cursor output must retain a sub-unit Q8 displacement");
+        require(second_cursor.cursor_x == 1 && second_cursor.cursor_x_q8 == 128,
+            "cursor Q8 displacement must remain the new per-cycle delta");
+
+        Harness scroll(tuning);
+        scroll.step(inactive(), two_finger(), 10000);
+        const LogicalActions first_scroll = scroll.step(inactive(), two_finger(0, 1), 10000);
+        const LogicalActions second_scroll = scroll.step(inactive(), two_finger(0, 1), 10000);
+        require(first_scroll.scroll_y == 0 && first_scroll.scroll_y_q8 == 4,
+            "scroll output must retain a sub-unit Q8 displacement");
+        require(second_scroll.scroll_y == 0 &&
+                    first_scroll.scroll_y_q8 + second_scroll.scroll_y_q8 == 8,
+            "scroll Q8 displacement must remain available before whole-step emission");
+    });
+
     run_case("MOTION-03 cursor-stops-with-input", [] {
         Harness harness;
         harness.step(inactive(), one_finger(), 10000);

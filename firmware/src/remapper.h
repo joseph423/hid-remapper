@@ -1,6 +1,8 @@
 #ifndef _REMAPPER_H_
 #define _REMAPPER_H_
 
+#include <stdint.h>
+
 #define OUR_OUT_INTERFACE 0xFFFF
 
 #define GPIO_USAGE_PAGE 0xFFF40000
@@ -24,7 +26,13 @@ void set_input_state(uint32_t usage, int32_t state_raw, int32_t state_scaled, ui
 
 // Adds one logical TPS43 output cycle to Remapper-owned report buffers. This
 // is called by the action adapter before process_mapping() builds reports.
-void inject_tps43_output(int32_t cursor_x, int32_t cursor_y, int32_t scroll_x, int32_t scroll_y, bool left_button_held, bool right_button_held);
+void inject_tps43_output(
+    int32_t cursor_x, int32_t cursor_y, int32_t scroll_x, int32_t scroll_y,
+    bool left_button_held, bool right_button_held);
+void inject_tps43_output_q8(
+    int64_t cursor_x_q8, int64_t cursor_y_q8, int64_t scroll_x_q8, int64_t scroll_y_q8,
+    bool left_button_held, bool right_button_held);
+void reset_tps43_fractional_output();
 
 void extra_init();
 void read_report(bool* new_report, bool* tick);

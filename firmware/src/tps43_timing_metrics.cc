@@ -109,11 +109,17 @@ struct NormalCapture {
         Dumping } phase = Phase::Idle;
     uint64_t start = 0;
     uint64_t next_print = 0;
-    IntervalStats samples, movement, usb;
+    IntervalStats samples, movement, usb, scroll_usb;
     Trace sample_trace, usb_trace;
     uint32_t counts[7] = {};      // 0..5 fingers, invalid >5.
     uint32_t delta_bins[6] = {};  // max(abs(dx),abs(dy)): 0,1,2..3,4..7,8..15,16+.
     uint32_t failed_usb = 0;
+    uint32_t raw_scroll_samples = 0;
+    int64_t raw_scroll_x = 0, raw_scroll_y = 0;
+    uint32_t scroll_action_samples = 0;
+    int64_t scroll_action_x_q8 = 0, scroll_action_y_q8 = 0;
+    uint32_t scroll_usb_attempts = 0, scroll_usb_successes = 0;
+    int64_t scroll_usb_wheel = 0, scroll_usb_pan = 0;
     uint32_t start_failures = 0, start_timeouts = 0;
     uint32_t failures = 0, timeouts = 0, max_poll = 0, max_acquisition = 0;
     uint32_t dump_row = 0;
@@ -218,6 +224,11 @@ void tps43_normal_capture_note_sample(uint64_t now_us, const Tps43Sample& sample
             add_interval(normal.movement, sample.timestamp_us);
         }
     }
+    if (sample.finger_count == 2 && sample.scroll_gesture && sample.movement_reported) {
+        ++normal.raw_scroll_samples;
+        normal.raw_scroll_x += sample.relative_x;
+        normal.raw_scroll_y += sample.relative_y;
+    }
     // Sample flags: bit0 movement, bit1 single tap, bit2 two-finger tap, bit3 scroll.
     const uint8_t flags = sample.movement_reported | (sample.single_tap << 1) |
                           (sample.two_finger_tap << 2) | (sample.scroll_gesture << 3);
@@ -237,6 +248,29 @@ void tps43_normal_capture_note_usb(uint64_t now_us, bool success, int32_t dx, in
     // USB flags: bit0 successful submission. count is unused for USB rows.
     add_trace(normal.usb_trace, { static_cast<uint32_t>(now_us - normal.start), dx, dy, 0,
                                     static_cast<uint8_t>(success) });
+}
+
+void tps43_normal_capture_note_scroll_action(uint64_t now_us, int64_t scroll_x_q8, int64_t scroll_y_q8) {
+    if (!recording_at(now_us) || (scroll_x_q8 == 0 && scroll_y_q8 == 0)) {
+        return;
+    }
+    ++normal.scroll_action_samples;
+    normal.scroll_action_x_q8 += scroll_x_q8;
+    normal.scroll_action_y_q8 += scroll_y_q8;
+}
+
+void tps43_normal_capture_note_scroll_usb(uint64_t now_us, bool success, int32_t wheel, int32_t pan) {
+    if (!recording_at(now_us) || (wheel == 0 && pan == 0)) {
+        return;
+    }
+    ++normal.scroll_usb_attempts;
+    if (!success) {
+        return;
+    }
+    ++normal.scroll_usb_successes;
+    normal.scroll_usb_wheel += wheel;
+    normal.scroll_usb_pan += pan;
+    add_interval(normal.scroll_usb, now_us);
 }
 
 void tps43_normal_capture_poll(uint64_t now_us) {
@@ -275,13 +309,22 @@ void tps43_normal_capture_poll(uint64_t now_us) {
             static_cast<unsigned long>(kTraceCapacity),
             static_cast<unsigned long>(normal.sample_trace.count > kTraceCapacity ? normal.sample_trace.count - kTraceCapacity : 0),
             static_cast<unsigned long>(normal.usb_trace.count > kTraceCapacity ? normal.usb_trace.count - kTraceCapacity : 0));
+    } else if (row == 6) {
+        printf("normal_scroll raw_samples=%lu raw_dx=%lld raw_dy=%lld action_samples=%lu action_q8_dx=%lld action_q8_dy=%lld usb_attempts=%lu usb_successes=%lu usb_wheel=%lld usb_pan=%lld usb_mean_us=%lu usb_max_us=%lu\n",
+            static_cast<unsigned long>(normal.raw_scroll_samples), static_cast<long long>(normal.raw_scroll_x),
+            static_cast<long long>(normal.raw_scroll_y), static_cast<unsigned long>(normal.scroll_action_samples),
+            static_cast<long long>(normal.scroll_action_x_q8), static_cast<long long>(normal.scroll_action_y_q8),
+            static_cast<unsigned long>(normal.scroll_usb_attempts), static_cast<unsigned long>(normal.scroll_usb_successes),
+            static_cast<long long>(normal.scroll_usb_wheel), static_cast<long long>(normal.scroll_usb_pan),
+            static_cast<unsigned long>(normal.scroll_usb.count ? normal.scroll_usb.total / normal.scroll_usb.count : 0),
+            static_cast<unsigned long>(normal.scroll_usb.maximum));
     } else {
         const uint32_t sample_rows = std::min<uint32_t>(normal.sample_trace.count, kTraceCapacity);
         const uint32_t usb_rows = std::min<uint32_t>(normal.usb_trace.count, kTraceCapacity);
-        if (row - 6 < sample_rows) {
-            print_trace_row("sample", normal.sample_trace, row - 6);
-        } else if (row - 6 - sample_rows < usb_rows) {
-            print_trace_row("usb", normal.usb_trace, row - 6 - sample_rows);
+        if (row - 7 < sample_rows) {
+            print_trace_row("sample", normal.sample_trace, row - 7);
+        } else if (row - 7 - sample_rows < usb_rows) {
+            print_trace_row("usb", normal.usb_trace, row - 7 - sample_rows);
         } else {
             printf("NORMAL DONE: summaries cover all 15 seconds; traces retain last %lu events per source; M repeats\n",
                 static_cast<unsigned long>(kTraceCapacity));

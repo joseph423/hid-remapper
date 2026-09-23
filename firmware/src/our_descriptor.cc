@@ -523,6 +523,9 @@ uint8_t const our_report_descriptor_xac_compat[] = {
 
 void kb_mouse_handle_set_report(uint8_t report_id, const uint8_t* buffer, uint16_t reqlen) {
     if (report_id == REPORT_ID_MULTIPLIER && reqlen >= 1) {
+        if (resolution_multiplier != buffer[0]) {
+            reset_tps43_fractional_output();
+        }
         memcpy(&resolution_multiplier, buffer, 1);
     } else if (boot_protocol_keyboard || (report_id == REPORT_ID_LEDS)) {
         handle_received_report(buffer, reqlen, OUR_OUT_INTERFACE, report_id);

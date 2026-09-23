@@ -27,6 +27,14 @@ struct LogicalActions {
     int32_t cursor_y = 0;
     int32_t scroll_x = 0;
     int32_t scroll_y = 0;
+    // Per-cycle Q8 motion delivered to the Remapper output boundary. The
+    // integral fields above remain the compatibility projection used by
+    // behavior tests and diagnostics; the adapter accumulates these fields
+    // without quantizing them first.
+    int64_t cursor_x_q8 = 0;
+    int64_t cursor_y_q8 = 0;
+    int64_t scroll_x_q8 = 0;
+    int64_t scroll_y_q8 = 0;
     ButtonAction left_button = ButtonAction::None;
     ButtonAction right_button = ButtonAction::None;
 };
