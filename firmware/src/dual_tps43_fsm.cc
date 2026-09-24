@@ -99,6 +99,12 @@ LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
     }
 
     apply_motion(snapshot, actions);
+    actions.right_touch_active = snapshot.right.active;
+    actions.right_touch_started = snapshot.right.touch_started;
+    actions.right_touch_ended = snapshot.right.touch_ended;
+    actions.right_touch_finger_count = snapshot.right.finger_count;
+    actions.right_touch_relative_x = snapshot.right.relative_x;
+    actions.right_touch_relative_y = snapshot.right.relative_y;
     previous_left_active_ = snapshot.left.active;
     previous_right_active_ = snapshot.right.active;
     return actions;

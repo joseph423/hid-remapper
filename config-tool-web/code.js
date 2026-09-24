@@ -1303,8 +1303,8 @@ function setup_usage_modal(source_or_target) {
         add_usage_buttons(usages['source']);
         known_usages = { ...usages['source_0'], ...usages['source_1'], ...usages['source'] };
     } else {
-        add_usage_buttons(usages[config['our_descriptor_number']]);
-        known_usages = usages[config['our_descriptor_number']];
+        known_usages = usages[config['our_descriptor_number']] ?? {};
+        add_usage_buttons(known_usages);
     }
 
     for (const usage_ of extra_usages[source_or_target]) {
@@ -1619,7 +1619,8 @@ function readable_usage_name(usage, default_to_hex = true) {
 }
 
 function readable_target_usage_name(usage) {
-    return (usage in usages[config['our_descriptor_number']]) ? usages[config['our_descriptor_number']][usage]['name'] : usage;
+    const target_usages = usages[config['our_descriptor_number']] ?? {};
+    return (usage in target_usages) ? target_usages[usage]['name'] : readable_usage_name(usage);
 }
 
 function set_forced_layers(mapping, mapping_container) {

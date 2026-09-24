@@ -32,6 +32,11 @@ void inject_tps43_output(
 void inject_tps43_output_q8(
     int64_t cursor_x_q8, int64_t cursor_y_q8, int64_t scroll_x_q8, int64_t scroll_y_q8,
     bool left_button_held, bool right_button_held);
+// Adds one Right-pad contact frame for the isolated Phase 16 digitizer
+// descriptor. The default descriptor has none of these usages, so it is a
+// no-op for the approved production profile.
+void inject_tps43_digitizer(
+    bool active, uint8_t finger_count, int32_t x, int32_t y, uint16_t scan_time);
 void reset_tps43_fractional_output();
 
 void extra_init();

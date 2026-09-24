@@ -31,6 +31,7 @@
 #include "our_descriptor.h"
 #include "platform.h"
 #include "remapper.h"
+#include "tps43_timing_metrics.h"
 
 // These IDs are bogus. If you want to distribute any hardware using this,
 // you will have to get real ones.
@@ -99,6 +100,13 @@ const uint8_t configuration_descriptor5[] = {
     TUD_CDC_DESCRIPTOR(2, 3, 0x84, 8, 0x04, 0x85, 64),
 };
 
+const uint8_t configuration_descriptor6[] = {
+    TUD_CONFIG_DESCRIPTOR(1, 4, 0, TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN + TUD_CDC_DESC_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+    TUD_HID_DESCRIPTOR(0, 0, HID_ITF_PROTOCOL_KEYBOARD, our_descriptors[6].descriptor_length, 0x81, CFG_TUD_HID_EP_BUFSIZE, 1),
+    TUD_HID_DESCRIPTOR(1, 0, HID_ITF_PROTOCOL_NONE, config_report_descriptor_length, 0x83, CFG_TUD_HID_EP_BUFSIZE, 1),
+    TUD_CDC_DESCRIPTOR(2, 3, 0x84, 8, 0x04, 0x85, 64),
+};
+
 const uint8_t* configuration_descriptors[] = {
     configuration_descriptor0,
     configuration_descriptor1,
@@ -106,6 +114,7 @@ const uint8_t* configuration_descriptors[] = {
     configuration_descriptor3,
     configuration_descriptor4,
     configuration_descriptor5,
+    configuration_descriptor6,
 };
 
 char const* string_desc_arr[] = {
@@ -225,6 +234,22 @@ void tud_hid_set_protocol_cb(uint8_t instance, uint8_t protocol) {
     printf("tud_hid_set_protocol_cb %d %d\n", instance, protocol);
     boot_protocol_keyboard = (protocol == HID_PROTOCOL_BOOT);
     boot_protocol_updated = true;
+}
+
+// Records endpoint completion separately from TinyUSB's report-queue acceptance.
+void tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report, uint16_t len) {
+    if (our_descriptor_number == 6 && instance == 0 && report != nullptr && len > 0 &&
+        report[0] == REPORT_ID_TPS43_DIGITIZER) {
+        tps43_normal_capture_note_digitizer_transfer(get_time(), true, report, len);
+    }
+}
+
+void tud_hid_report_failed_cb(
+    uint8_t instance, hid_report_type_t report_type, uint8_t const* report, uint16_t xferred_bytes) {
+    if (our_descriptor_number == 6 && instance == 0 && report_type == HID_REPORT_TYPE_INPUT && report != nullptr &&
+        report[0] == REPORT_ID_TPS43_DIGITIZER) {
+        tps43_normal_capture_note_digitizer_transfer(get_time(), false, report, xferred_bytes);
+    }
 }
 
 void tud_mount_cb() {

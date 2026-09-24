@@ -114,6 +114,15 @@ struct NormalCapture {
     uint32_t counts[7] = {};      // 0..5 fingers, invalid >5.
     uint32_t delta_bins[6] = {};  // max(abs(dx),abs(dy)): 0,1,2..3,4..7,8..15,16+.
     uint32_t failed_usb = 0;
+    // A 15-second full-speed interrupt endpoint can complete at most 15,000 reports.
+    uint16_t digitizer_transfer_complete = 0;
+    uint16_t digitizer_transfer_failed = 0;
+    uint16_t digitizer_payload_bad_length = 0;
+    uint16_t digitizer_contact_counts[4] = {};  // 0, 1, 2, invalid.
+    uint8_t digitizer_contact1_flags_or = 0;
+    uint8_t digitizer_contact1_flags_and = 0;
+    uint8_t digitizer_contact2_flags_or = 0;
+    uint8_t digitizer_contact2_flags_and = 0;
     uint32_t raw_scroll_samples = 0;
     int64_t raw_scroll_x = 0, raw_scroll_y = 0;
     uint32_t scroll_action_samples = 0;
@@ -250,6 +259,47 @@ void tps43_normal_capture_note_usb(uint64_t now_us, bool success, int32_t dx, in
                                     static_cast<uint8_t>(success) });
 }
 
+void tps43_normal_capture_note_digitizer_transfer(
+    uint64_t now_us, bool success, const uint8_t* report, uint16_t len) {
+    if (!recording_at(now_us)) {
+        return;
+    }
+    if (!success) {
+        ++normal.digitizer_transfer_failed;
+        return;
+    }
+
+    ++normal.digitizer_transfer_complete;
+    if (report == nullptr || len != 16) {
+        ++normal.digitizer_payload_bad_length;
+        return;
+    }
+
+    // Report includes the ID byte: contact flags are bytes 1 and 7, and the
+    // contact count is byte 13. The three defined contact flags occupy bits 0-2.
+    const uint8_t contact1_flags = report[1] & 0x07;
+    const uint8_t contact2_flags = report[7] & 0x07;
+    const uint8_t contact_count = report[13];
+    ++normal.digitizer_contact_counts[contact_count <= 2 ? contact_count : 3];
+
+    if (contact_count >= 1 && contact_count <= 2) {
+        if (normal.digitizer_contact_counts[1] + normal.digitizer_contact_counts[2] == 1) {
+            normal.digitizer_contact1_flags_and = contact1_flags;
+        } else {
+            normal.digitizer_contact1_flags_and &= contact1_flags;
+        }
+        normal.digitizer_contact1_flags_or |= contact1_flags;
+    }
+    if (contact_count == 2) {
+        if (normal.digitizer_contact_counts[2] == 1) {
+            normal.digitizer_contact2_flags_and = contact2_flags;
+        } else {
+            normal.digitizer_contact2_flags_and &= contact2_flags;
+        }
+        normal.digitizer_contact2_flags_or |= contact2_flags;
+    }
+}
+
 void tps43_normal_capture_note_scroll_action(uint64_t now_us, int64_t scroll_x_q8, int64_t scroll_y_q8) {
     if (!recording_at(now_us) || (scroll_x_q8 == 0 && scroll_y_q8 == 0)) {
         return;
@@ -285,9 +335,11 @@ void tps43_normal_capture_poll(uint64_t now_us) {
     normal.next_print = now_us + 10000;
     const uint32_t row = normal.dump_row++;
     if (row == 0) {
-        printf("normal_summary duration_us=15000000 samples=%lu usb_attempts=%lu usb_failed=%lu failures=%lu timeouts=%lu acquisition_max_us=%lu driver_lifetime_max_poll_us=%lu\n",
+        printf("normal_summary duration_us=15000000 samples=%lu usb_attempts=%lu usb_failed=%lu digitizer_transfer_complete=%lu digitizer_transfer_failed=%lu failures=%lu timeouts=%lu acquisition_max_us=%lu driver_lifetime_max_poll_us=%lu\n",
             static_cast<unsigned long>(normal.sample_trace.count), static_cast<unsigned long>(normal.usb_trace.count),
-            static_cast<unsigned long>(normal.failed_usb), static_cast<unsigned long>(normal.failures - normal.start_failures),
+            static_cast<unsigned long>(normal.failed_usb), static_cast<unsigned long>(normal.digitizer_transfer_complete),
+            static_cast<unsigned long>(normal.digitizer_transfer_failed),
+            static_cast<unsigned long>(normal.failures - normal.start_failures),
             static_cast<unsigned long>(normal.timeouts - normal.start_timeouts), static_cast<unsigned long>(normal.max_acquisition),
             static_cast<unsigned long>(normal.max_poll));
     } else if (row <= 3) {
@@ -318,13 +370,28 @@ void tps43_normal_capture_poll(uint64_t now_us) {
             static_cast<long long>(normal.scroll_usb_wheel), static_cast<long long>(normal.scroll_usb_pan),
             static_cast<unsigned long>(normal.scroll_usb.count ? normal.scroll_usb.total / normal.scroll_usb.count : 0),
             static_cast<unsigned long>(normal.scroll_usb.maximum));
+    } else if (row == 7) {
+        printf("normal_digitizer payload_reports=%u bad_length=%u contact_count_0=%u contact_count_1=%u contact_count_2=%u contact_count_invalid=%u contact1_active=%u contact1_flags_or=0x%02x contact1_flags_and=0x%02x contact2_active=%u contact2_flags_or=0x%02x contact2_flags_and=0x%02x flags=tip:bit0,in_range:bit1,touch_valid:bit2\n",
+            static_cast<unsigned>(normal.digitizer_contact_counts[0] + normal.digitizer_contact_counts[1] +
+                                 normal.digitizer_contact_counts[2] + normal.digitizer_contact_counts[3]),
+            static_cast<unsigned>(normal.digitizer_payload_bad_length),
+            static_cast<unsigned>(normal.digitizer_contact_counts[0]),
+            static_cast<unsigned>(normal.digitizer_contact_counts[1]),
+            static_cast<unsigned>(normal.digitizer_contact_counts[2]),
+            static_cast<unsigned>(normal.digitizer_contact_counts[3]),
+            static_cast<unsigned>(normal.digitizer_contact_counts[1] + normal.digitizer_contact_counts[2]),
+            static_cast<unsigned>(normal.digitizer_contact1_flags_or),
+            static_cast<unsigned>(normal.digitizer_contact1_flags_and),
+            static_cast<unsigned>(normal.digitizer_contact_counts[2]),
+            static_cast<unsigned>(normal.digitizer_contact2_flags_or),
+            static_cast<unsigned>(normal.digitizer_contact2_flags_and));
     } else {
         const uint32_t sample_rows = std::min<uint32_t>(normal.sample_trace.count, kTraceCapacity);
         const uint32_t usb_rows = std::min<uint32_t>(normal.usb_trace.count, kTraceCapacity);
-        if (row - 7 < sample_rows) {
-            print_trace_row("sample", normal.sample_trace, row - 7);
-        } else if (row - 7 - sample_rows < usb_rows) {
-            print_trace_row("usb", normal.usb_trace, row - 7 - sample_rows);
+        if (row - 8 < sample_rows) {
+            print_trace_row("sample", normal.sample_trace, row - 8);
+        } else if (row - 8 - sample_rows < usb_rows) {
+            print_trace_row("usb", normal.usb_trace, row - 8 - sample_rows);
         } else {
             printf("NORMAL DONE: summaries cover all 15 seconds; traces retain last %lu events per source; M repeats\n",
                 static_cast<unsigned long>(kTraceCapacity));

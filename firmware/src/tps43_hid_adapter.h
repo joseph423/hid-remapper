@@ -28,6 +28,8 @@ class Tps43RemapperActionSink final : public Tps43ActionSink {
     bool right_button_held_ = false;
     bool left_release_pending_ = false;
     bool right_release_pending_ = false;
+    int32_t digitizer_x_ = 16384;
+    int32_t digitizer_y_ = 16384;
 };
 
 #endif

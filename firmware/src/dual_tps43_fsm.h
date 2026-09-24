@@ -35,6 +35,14 @@ struct LogicalActions {
     int64_t cursor_y_q8 = 0;
     int64_t scroll_x_q8 = 0;
     int64_t scroll_y_q8 = 0;
+    // Right-pad touch metadata for the isolated Phase 16 digitizer proof of
+    // concept. The default generic-mouse descriptor ignores these fields.
+    bool right_touch_active = false;
+    bool right_touch_started = false;
+    bool right_touch_ended = false;
+    uint8_t right_touch_finger_count = 0;
+    int32_t right_touch_relative_x = 0;
+    int32_t right_touch_relative_y = 0;
     ButtonAction left_button = ButtonAction::None;
     ButtonAction right_button = ButtonAction::None;
 };

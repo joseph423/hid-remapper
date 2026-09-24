@@ -39,11 +39,20 @@ void test_capture(FILE* output) {
     sample.timestamp_us = 500;
     tps43_normal_capture_note_sample(sample.timestamp_us, sample, true, 5, 2, 3, 400);
     tps43_normal_capture_note_usb(500, true, 99, 0);
+    const uint8_t two_finger_report[16] = { 3, 0x07, 0, 0, 0, 0, 0, 0x07, 0, 0, 0, 0, 0, 2, 0, 0 };
+    const uint8_t one_finger_report[16] = { 3, 0x07, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0 };
+    tps43_normal_capture_note_digitizer_transfer(500, true, two_finger_report, sizeof(two_finger_report));
     sample.timestamp_us = 1000100;
     tps43_normal_capture_note_sample(sample.timestamp_us, sample, true, 5, 2, 3, 400);
     tps43_normal_capture_note_sample(sample.timestamp_us, sample, false, 5, 2, 3, 400);
     tps43_normal_capture_note_usb(1000200, true, -1, 0);
     tps43_normal_capture_note_usb(1000500, false, -1, 0);
+    tps43_normal_capture_note_digitizer_transfer(
+        1000250, true, two_finger_report, sizeof(two_finger_report));
+    tps43_normal_capture_note_digitizer_transfer(
+        1000300, true, one_finger_report, sizeof(one_finger_report));
+    tps43_normal_capture_note_digitizer_transfer(
+        1000550, false, two_finger_report, sizeof(two_finger_report));
     tps43_normal_capture_note_scroll_action(1000600, 4, -8);
     tps43_normal_capture_note_scroll_usb(1000700, true, 1, -2);
     sample.timestamp_us += 1000;
@@ -56,12 +65,13 @@ void test_capture(FILE* output) {
     assert(lseek(fileno(stdout), 0, SEEK_CUR) == before);  // No printing during recording.
     finish_dump(16000100);
     const auto text = read_output(output);
-    assert(text.find("samples=2 usb_attempts=3 usb_failed=1 failures=1 timeouts=1") != std::string::npos);
+    assert(text.find("samples=2 usb_attempts=3 usb_failed=1 digitizer_transfer_complete=2 digitizer_transfer_failed=1 failures=1 timeouts=1") != std::string::npos);
     assert(text.find("normal_samples intervals=1 mean_us=1000 max_us=1000") != std::string::npos);
     assert(text.find("normal_usb_submitted intervals=1 mean_us=1000 max_us=1000") != std::string::npos);
     assert(text.find("normal_scroll raw_samples=0 raw_dx=0 raw_dy=0 action_samples=1 action_q8_dx=4 action_q8_dy=-8 usb_attempts=1 usb_successes=1 usb_wheel=1 usb_pan=-2") != std::string::npos);
     assert(text.find("normal_sample t_us=0 dx=-1 dy=0 count=1 flags=1") != std::string::npos);
     assert(text.find("normal_usb t_us=400 dx=-1 dy=0 count=0 flags=0") != std::string::npos);
+    assert(text.find("normal_digitizer payload_reports=2 bad_length=0 contact_count_0=0 contact_count_1=1 contact_count_2=1 contact_count_invalid=0 contact1_active=2 contact1_flags_or=0x07 contact1_flags_and=0x07 contact2_active=1 contact2_flags_or=0x07 contact2_flags_and=0x07") != std::string::npos);
 }
 
 void test_ring_and_repeat(FILE* output) {
@@ -75,7 +85,7 @@ void test_ring_and_repeat(FILE* output) {
     }
     finish_dump(36000000);
     const auto text = read_output(output);
-    assert(text.find("samples=600 usb_attempts=0 usb_failed=0 failures=0 timeouts=0") != std::string::npos);
+    assert(text.find("samples=600 usb_attempts=0 usb_failed=0 digitizer_transfer_complete=0 digitizer_transfer_failed=0 failures=0 timeouts=0") != std::string::npos);
     assert(text.find("sample_overwritten=88 usb_overwritten=0") != std::string::npos);
     assert(text.find("normal_sample t_us=88000 dx=88") != std::string::npos);
     assert(text.find("normal_sample t_us=599000 dx=599") != std::string::npos);

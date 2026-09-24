@@ -59,6 +59,10 @@ void tps43_normal_capture_note_sample(uint64_t now_us, const Tps43Sample& sample
 // dx/dy are signed report fields; success means queued by USB, not displayed by OS.
 void tps43_normal_capture_note_usb(uint64_t now_us, bool success, int32_t dx, int32_t dy);
 
+// Records descriptor-6 report-3 transfer completion and summarizes its payload.
+void tps43_normal_capture_note_digitizer_transfer(
+    uint64_t now_us, bool success, const uint8_t* report, uint16_t len);
+
 // Records nonzero active-scroll Q8 output without printing or performing I/O.
 void tps43_normal_capture_note_scroll_action(uint64_t now_us, int64_t scroll_x_q8, int64_t scroll_y_q8);
 

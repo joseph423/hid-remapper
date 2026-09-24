@@ -102,6 +102,10 @@ To compile the nRF52 firmware, you can either follow [Nordic's setup instruction
 docker run --rm -v $(pwd):/workdir/project -w /workdir/project/firmware-bluetooth nordicplayground/nrfconnect-sdk:v2.2-branch west build -b seeed_xiao_nrf52840
 ```
 
+### Firmware memory checks
+
+Before implementing a firmware change that can affect memory use, review both persistent RAM use and peak temporary heap use. Pay particular attention to HID descriptors, descriptor parsing, report buffers, mapping containers, and configuration rebuilds, where reallocations can temporarily require both old and new storage. Check startup, attached USB keyboard enumeration, and configuration rebuild paths for the target setup. A successful build or one normal boot does not by itself establish that the firmware has enough heap headroom. This project has reproduced descriptor-derived out-of-memory stalls; see the [diagnostic record](docs/diagnostics/hid-remapper-save-freeze.md).
+
 ## License
 
 The software in this repository is licensed under the [MIT License](LICENSE), unless stated otherwise.

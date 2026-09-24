@@ -58,7 +58,7 @@ bool have_dpad = false;
 usage_def_t our_dpad_usage;  // only valid if have_dpad is true
 
 std::unordered_map<uint16_t, std::unordered_map<uint8_t, std::vector<usage_usage_def_t>>> their_used_usages;  // dev_addr+interface -> report_id -> (usage, usage_def) vector
-std::unordered_map<uint16_t, std::unordered_map<uint8_t, std::vector<int32_t*>>> array_range_usages;          // dev_addr+interface -> report_id -> input_state ptr vector
+std::unordered_map<uint16_t, std::unordered_map<uint8_t, std::vector<uint16_t>>> array_range_state_indices;  // dev_addr+interface -> report_id -> input_state index vector
 
 std::vector<sticky_usage_t> sticky_usages;
 std::vector<tap_hold_sticky_usage_t> tap_sticky_usages;
@@ -84,6 +84,10 @@ std::vector<uint8_t> report_ids;
 
 #define MAX_INPUT_STATES 1024
 #define PREV_STATE_OFFSET MAX_INPUT_STATES
+static_assert(MAX_INPUT_STATES <= 0x10000, "input-state indices must fit in uint16_t");
+
+constexpr uint8_t kDerivativeStateMarked = 1 << 0;
+constexpr uint8_t kArrayRangeStateSeen = 1 << 7;  // Temporary deduplication marker during descriptor derivation.
 
 int32_t input_state[MAX_INPUT_STATES * 2];
 tap_hold_state_t tap_hold_state[MAX_INPUT_STATES];
@@ -391,13 +395,26 @@ bool mark_derivative_state(std::array<uint8_t, MAX_INPUT_STATES>& flags, int32_t
     if (state_ptr == NULL || state_ptr < input_state || state_ptr >= input_state + MAX_INPUT_STATES) {
         return false;
     }
-    flags[state_ptr - input_state] = true;
+    flags[state_ptr - input_state] |= kDerivativeStateMarked;
     return true;
 }
 
 bool derivative_state_is_marked(const std::array<uint8_t, MAX_INPUT_STATES>& flags, const int32_t* state_ptr) {
     return state_ptr != NULL && state_ptr >= input_state && state_ptr < input_state + MAX_INPUT_STATES &&
-           flags[state_ptr - input_state] != 0;
+           (flags[state_ptr - input_state] & kDerivativeStateMarked) != 0;
+}
+
+void note_array_range_state(std::vector<uint16_t>& state_indices, int32_t* state_ptr) {
+    if (!mark_derivative_state(binary_state_flags, state_ptr)) {
+        return;
+    }
+
+    // Overlapping HID usage ranges can reference one state slot more than once.
+    const size_t state_index = state_ptr - input_state;
+    if ((binary_state_flags[state_index] & kArrayRangeStateSeen) != 0) {
+        state_indices.push_back(static_cast<uint16_t>(state_index));
+        binary_state_flags[state_index] &= static_cast<uint8_t>(~kArrayRangeStateSeen);
+    }
 }
 
 void set_mapping_from_config() {
@@ -1742,8 +1759,8 @@ void do_handle_received_report(const uint8_t* report, int len, uint16_t interfac
     }
 
     if (!is_rollover(report, len, interface, report_id)) {
-        for (int32_t* state_ptr : array_range_usages[interface][report_id]) {
-            *state_ptr &= ~(1 << interface_idx);
+        for (uint16_t state_index : array_range_state_indices[interface][report_id]) {
+            input_state[state_index] &= ~(1 << interface_idx);
         }
 
         for (auto const& their : their_used_usages[interface][report_id]) {
@@ -1918,11 +1935,50 @@ void inject_tps43_output_q8(
         metrics_timestamp_us);
 }
 
+void inject_tps43_digitizer(
+    bool active, uint8_t finger_count, int32_t x, int32_t y, uint16_t scan_time) {
+    constexpr uint8_t kReportId = REPORT_ID_TPS43_DIGITIZER;
+    if (our_descriptor_number != 6 || reports[kReportId] == nullptr) {
+        return;
+    }
+
+    const uint8_t contacts = active ? std::min<uint8_t>(finger_count, 2) : 0;
+    const auto coordinate = [](int32_t value) {
+        return static_cast<uint16_t>(std::clamp(value, int32_t{ 0 }, int32_t{ 32767 }));
+    };
+    const uint16_t center_x = coordinate(x);
+    const uint16_t center_y = coordinate(y);
+    const uint16_t first_x = coordinate(static_cast<int32_t>(center_x) - 512);
+    const uint16_t first_y = coordinate(static_cast<int32_t>(center_y) - 512);
+    const uint16_t second_x = coordinate(static_cast<int32_t>(center_x) + 512);
+    const uint16_t second_y = coordinate(static_cast<int32_t>(center_y) + 512);
+
+    // The Phase 16 descriptor is intentionally fixed and isolated, so these
+    // bit positions are its test-contract boundary rather than a generic
+    // usage lookup. This avoids ambiguity from the repeated X/Y usages in
+    // the two digitizer contact collections.
+    put_bits(reports[kReportId], report_sizes[kReportId], 0, 1, contacts >= 1);
+    put_bits(reports[kReportId], report_sizes[kReportId], 1, 1, contacts >= 1);
+    put_bits(reports[kReportId], report_sizes[kReportId], 2, 1, contacts >= 1);
+    put_bits(reports[kReportId], report_sizes[kReportId], 8, 16, first_x);
+    put_bits(reports[kReportId], report_sizes[kReportId], 24, 16, first_y);
+    put_bits(reports[kReportId], report_sizes[kReportId], 40, 8, 1);
+    put_bits(reports[kReportId], report_sizes[kReportId], 48, 1, contacts >= 2);
+    put_bits(reports[kReportId], report_sizes[kReportId], 49, 1, contacts >= 2);
+    put_bits(reports[kReportId], report_sizes[kReportId], 50, 1, contacts >= 2);
+    put_bits(reports[kReportId], report_sizes[kReportId], 56, 16, second_x);
+    put_bits(reports[kReportId], report_sizes[kReportId], 72, 16, second_y);
+    put_bits(reports[kReportId], report_sizes[kReportId], 88, 8, 2);
+    put_bits(reports[kReportId], report_sizes[kReportId], 96, 8, contacts);
+    put_bits(reports[kReportId], report_sizes[kReportId], 104, 16, active ? scan_time : 0);
+}
+
 void reset_tps43_fractional_output() {
     tps43_q8_remainders.fill(0);
 }
 
-void rlencode(const std::set<uint64_t>& usage_ranges, std::vector<usage_rle_t>& output) {
+template <typename UsageRanges>
+void rlencode(const UsageRanges& usage_ranges, std::vector<usage_rle_t>& output) {
     uint32_t start_usage = 0;
     uint32_t count = 0;
     for (auto const& range : usage_ranges) {
@@ -1972,7 +2028,19 @@ void clear_derived_usage_vectors(DerivedUsageMap& usage_map) {
 }
 
 void update_their_descriptor_derivates(bool descriptor_changed) {
-    std::set<uint64_t> their_usage_ranges_set;
+    std::vector<uint64_t> their_usage_ranges;
+    if (descriptor_changed) {
+        size_t required_usage_range_capacity = 0;
+        for (auto const& interface_entry : their_usages) {
+            for (auto const& report_entry : interface_entry.second) {
+                required_usage_range_capacity += report_entry.second.size();
+            }
+        }
+        // A sorted vector preserves the set's ordering and uniqueness without
+        // allocating a separate red-black-tree node for every usage range.
+        their_usage_ranges.reserve(required_usage_range_capacity);
+    }
+
     relative_state_flags.fill(false);
     binary_state_flags.fill(false);
 
@@ -1981,14 +2049,14 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
         // A descriptor changed, so report/interface keys and their capacities
         // may no longer describe the connected device.
         their_used_usages.clear();
-        array_range_usages.clear();
+        array_range_state_indices.clear();
     } else {
         // A configuration save rebuilds pointers into the same attached-device
         // descriptor. Preserve vector capacity from the previous build: the
         // Pico heap cannot grow after a keyboard has mounted, and discarding
         // these buffers makes the replacement allocation fatal.
         clear_derived_usage_vectors(their_used_usages);
-        clear_derived_usage_vectors(array_range_usages);
+        clear_derived_usage_vectors(array_range_state_indices);
     }
 
     for (auto& [interface, report_id_usage_map] : their_usages) {
@@ -2020,11 +2088,16 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                         if ((state_ptr_0 != NULL) || (state_ptr_n != NULL)) {
                             any_used = true;
                         }
-                        if (state_ptr_0 != NULL) {
-                            ++array_range_required_capacity;
-                        }
-                        if (state_ptr_n != NULL) {
-                            ++array_range_required_capacity;
+                        // Use the upper flag bit to count each slot once; the lower bit records its final binary classification.
+                        for (int32_t* state_ptr : { state_ptr_0, state_ptr_n }) {
+                            if (state_ptr != NULL) {
+                                const size_t state_index = state_ptr - input_state;
+                                uint8_t& state_flags = binary_state_flags[state_index];
+                                if ((state_flags & kArrayRangeStateSeen) == 0) {
+                                    state_flags |= kArrayRangeStateSeen;
+                                    ++array_range_required_capacity;
+                                }
+                            }
                         }
                     }
                     if (any_used) {
@@ -2035,11 +2108,10 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
             if (used_usages.capacity() < required_capacity) {
                 used_usages.reserve(required_capacity);
             }
-            auto& array_range_vector = array_range_usages[interface][report_id];
+            auto& array_range_vector = array_range_state_indices[interface][report_id];
             if (array_range_vector.capacity() < array_range_required_capacity) {
-                // Reserve before appending array-range pointers so a growth
-                // reallocation cannot temporarily require both old and new
-                // buffers on the memory-constrained Pico.
+                // Store unique 16-bit state indices to avoid allocating a
+                // duplicate pointer for every overlapping usage range.
                 array_range_vector.reserve(array_range_required_capacity);
             }
             for (auto [usage, usage_def] : usage_map) {
@@ -2050,7 +2122,7 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                     int32_t* state_ptr_raw_0 = get_state_ptr(usage, 0, false, true);
                     int32_t* state_ptr_raw_n = get_state_ptr(usage, hub_port, false, true);
                     if (descriptor_changed) {
-                        their_usage_ranges_set.insert(((uint64_t) usage << 32) | usage);
+                        their_usage_ranges.push_back(((uint64_t) usage << 32) | usage);
                     }
                     if (usage_def.is_relative) {
                         mark_derivative_state(relative_state_flags, state_ptr_0);
@@ -2083,7 +2155,7 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                     }
                 } else {  // usage_maximum != 0, array range usage
                     if (descriptor_changed) {
-                        their_usage_ranges_set.insert(((uint64_t) usage << 32) | usage_def.usage_maximum);
+                        their_usage_ranges.push_back(((uint64_t) usage << 32) | usage_def.usage_maximum);
                     }
                     bool any_used = false;
                     for (uint32_t actual_usage = usage; actual_usage <= usage_def.usage_maximum; actual_usage++) {
@@ -2091,13 +2163,11 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                         int32_t* state_ptr_n = get_state_ptr(actual_usage, hub_port);
                         if (state_ptr_0 != NULL) {
                             any_used = true;
-                            array_range_vector.push_back(state_ptr_0);
-                            mark_derivative_state(binary_state_flags, state_ptr_0);
+                            note_array_range_state(array_range_vector, state_ptr_0);
                         }
                         if (state_ptr_n != NULL) {
                             any_used = true;
-                            array_range_vector.push_back(state_ptr_n);
-                            mark_derivative_state(binary_state_flags, state_ptr_n);
+                            note_array_range_state(array_range_vector, state_ptr_n);
                         }
                     }
                     if (any_used) {
@@ -2119,7 +2189,11 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
 
     if (descriptor_changed) {
         their_usages_rle.clear();
-        rlencode(their_usage_ranges_set, their_usages_rle);
+        // Match std::set semantics before run-length encoding duplicate ranges.
+        std::sort(their_usage_ranges.begin(), their_usage_ranges.end());
+        their_usage_ranges.erase(
+            std::unique(their_usage_ranges.begin(), their_usage_ranges.end()), their_usage_ranges.end());
+        rlencode(their_usage_ranges, their_usages_rle);
     }
 
     for (auto& rev_map : reverse_mapping) {

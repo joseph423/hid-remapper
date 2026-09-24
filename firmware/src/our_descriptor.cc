@@ -138,6 +138,109 @@ const uint8_t our_report_descriptor_kb_mouse[] = {
     0xC0,                      // End Collection
 };
 
+// Isolated Phase 16 proof-of-concept descriptor. It intentionally omits the
+// generic mouse collection so the same X/Y usages unambiguously describe
+// digitizer contact positions. The production descriptor at index 0 is
+// unchanged.
+const uint8_t our_report_descriptor_tps43_digitizer[] = {
+    0x05, 0x01,                // Usage Page (Generic Desktop Ctrls)
+    0x09, 0x06,                // Usage (Keyboard)
+    0xA1, 0x01,                // Collection (Application)
+    0x85, REPORT_ID_KEYBOARD,  //   Report ID (REPORT_ID_KEYBOARD)
+    0x05, 0x07,                //   Usage Page (Kbrd/Keypad)
+    0x19, 0xE0,                //   Usage Minimum (0xE0)
+    0x29, 0xE7,                //   Usage Maximum (0xE7)
+    0x15, 0x00,                //   Logical Minimum (0)
+    0x25, 0x01,                //   Logical Maximum (1)
+    0x75, 0x01,                //   Report Size (1)
+    0x95, 0x08,                //   Report Count (8)
+    0x81, 0x02,                //   Input (Data,Var,Abs)
+    0x19, 0x04,                //   Usage Minimum (0x04)
+    0x29, 0x73,                //   Usage Maximum (0x73)
+    0x95, 0x70,                //   Report Count (112)
+    0x81, 0x02,                //   Input (Data,Var,Abs)
+    0xC0,                      // End Collection
+
+    0x05, 0x0D,                       // Usage Page (Digitizers)
+    0x09, 0x05,                       // Usage (Touch Pad)
+    0xA1, 0x01,                       // Collection (Application)
+    0x85, REPORT_ID_TPS43_DIGITIZER, //   Report ID (TPS43 digitizer)
+
+    0x09, 0x22,                //   Usage (Finger)
+    0xA1, 0x02,                //   Collection (Logical)
+    0x09, 0x42,                //     Usage (Tip Switch)
+    0x09, 0x32,                //     Usage (In Range)
+    0x09, 0x47,                //     Usage (Touch Valid)
+    0x15, 0x00,                //     Logical Minimum (0)
+    0x25, 0x01,                //     Logical Maximum (1)
+    0x75, 0x01,                //     Report Size (1)
+    0x95, 0x03,                //     Report Count (3)
+    0x81, 0x02,                //     Input (Data,Var,Abs)
+    0x75, 0x05,                //     Report Size (5)
+    0x95, 0x01,                //     Report Count (1)
+    0x81, 0x03,                //     Input (Const,Var,Abs)
+    0x05, 0x01,                //     Usage Page (Generic Desktop Ctrls)
+    0x09, 0x30,                //     Usage (X)
+    0x09, 0x31,                //     Usage (Y)
+    0x16, 0x00, 0x00,          //     Logical Minimum (0)
+    0x26, 0xFF, 0x7F,          //     Logical Maximum (32767)
+    0x75, 0x10,                //     Report Size (16)
+    0x95, 0x02,                //     Report Count (2)
+    0x81, 0x02,                //     Input (Data,Var,Abs)
+    0x05, 0x0D,                //     Usage Page (Digitizers)
+    0x09, 0x51,                //     Usage (Contact Identifier)
+    0x15, 0x00,                //     Logical Minimum (0)
+    0x25, 0xFF,                //     Logical Maximum (255)
+    0x75, 0x08,                //     Report Size (8)
+    0x95, 0x01,                //     Report Count (1)
+    0x81, 0x02,                //     Input (Data,Var,Abs)
+    0xC0,                      //   End Collection
+
+    0x09, 0x22,                //   Usage (Finger)
+    0xA1, 0x02,                //   Collection (Logical)
+    0x09, 0x42,                //     Usage (Tip Switch)
+    0x09, 0x32,                //     Usage (In Range)
+    0x09, 0x47,                //     Usage (Touch Valid)
+    0x15, 0x00,                //     Logical Minimum (0)
+    0x25, 0x01,                //     Logical Maximum (1)
+    0x75, 0x01,                //     Report Size (1)
+    0x95, 0x03,                //     Report Count (3)
+    0x81, 0x02,                //     Input (Data,Var,Abs)
+    0x75, 0x05,                //     Report Size (5)
+    0x95, 0x01,                //     Report Count (1)
+    0x81, 0x03,                //     Input (Const,Var,Abs)
+    0x05, 0x01,                //     Usage Page (Generic Desktop Ctrls)
+    0x09, 0x30,                //     Usage (X)
+    0x09, 0x31,                //     Usage (Y)
+    0x16, 0x00, 0x00,          //     Logical Minimum (0)
+    0x26, 0xFF, 0x7F,          //     Logical Maximum (32767)
+    0x75, 0x10,                //     Report Size (16)
+    0x95, 0x02,                //     Report Count (2)
+    0x81, 0x02,                //     Input (Data,Var,Abs)
+    0x05, 0x0D,                //     Usage Page (Digitizers)
+    0x09, 0x51,                //     Usage (Contact Identifier)
+    0x15, 0x00,                //     Logical Minimum (0)
+    0x25, 0xFF,                //     Logical Maximum (255)
+    0x75, 0x08,                //     Report Size (8)
+    0x95, 0x01,                //     Report Count (1)
+    0x81, 0x02,                //     Input (Data,Var,Abs)
+    0xC0,                      //   End Collection
+
+    0x09, 0x54,                //   Usage (Contact Count)
+    0x15, 0x00,                //   Logical Minimum (0)
+    0x25, 0x02,                //   Logical Maximum (2)
+    0x75, 0x08,                //   Report Size (8)
+    0x95, 0x01,                //   Report Count (1)
+    0x81, 0x02,                //   Input (Data,Var,Abs)
+    0x09, 0x56,                //   Usage (Scan Time)
+    0x15, 0x00,                //   Logical Minimum (0)
+    0x26, 0xFF, 0xFF,          //   Logical Maximum (65535)
+    0x75, 0x10,                //   Report Size (16)
+    0x95, 0x01,                //   Report Count (1)
+    0x81, 0x02,                //   Input (Data,Var,Abs)
+    0xC0,                      // End Collection
+};
+
 const uint8_t our_report_descriptor_absolute[] = {
     0x05, 0x01,                // Usage Page (Generic Desktop Ctrls)
     0x09, 0x06,                // Usage (Keyboard)
@@ -698,6 +801,16 @@ const our_descriptor_def_t our_descriptors[] = {
         .handle_received_report = do_handle_received_report,
         .clear_report = xac_compat_clear_report,
         .default_value = ps4_stadia_default_value,  // sic
+    },
+    {
+        .idx = 6,
+        .descriptor = our_report_descriptor_tps43_digitizer,
+        .descriptor_length = sizeof(our_report_descriptor_tps43_digitizer),
+        .handle_received_report = do_handle_received_report,
+        .handle_get_report = kb_mouse_handle_get_report,
+        .handle_set_report = kb_mouse_handle_set_report,
+        .set_report_synchronous = kb_mouse_set_report_synchronous,
+        .should_cause_wakeup = kb_mouse_should_cause_wakeup,
     },
 };
 
