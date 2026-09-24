@@ -30,6 +30,9 @@ struct Tps43Sample {
     bool single_tap = false;
     bool two_finger_tap = false;
     bool scroll_gesture = false;
+    // Sensor-reported cycle duration and whether its requested rate was missed.
+    uint8_t previous_cycle_time_ms = 0;
+    bool report_rate_missed = false;
     // The contact array is optional. False means consumers must use only the
     // compact fields above; it does not make the compact sample invalid.
     bool contact_details_available = false;

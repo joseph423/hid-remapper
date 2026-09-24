@@ -8,7 +8,7 @@ const STICKY_FLAG = 1 << 0;
 const TAP_FLAG = 1 << 1;
 const HOLD_FLAG = 1 << 2;
 const CONFIG_SIZE = 32;
-const CONFIG_VERSION = 19;
+const CONFIG_VERSION = 22;
 const VENDOR_ID = 0xCAFE;
 const PRODUCT_ID = 0xBAF2;
 const DEFAULT_PARTIAL_SCROLL_TIMEOUT = 1000000;
@@ -23,6 +23,8 @@ const DEFAULT_TPS43_TUNING = {
     'left_assisted_drag_axis_threshold': 2,
     'cursor_base_scale_q8': 128,
     'scroll_base_scale_q8': 4,
+    'subthreshold_cursor_expiry_ms': 50,
+    'subthreshold_cursor_threshold': 2,
 };
 
 const NLAYERS = 8;
@@ -70,6 +72,7 @@ const ADD_QUIRK = 24;
 const GET_QUIRK = 25;
 const GET_TPS43_TUNING = 26;
 const SET_TPS43_TUNING = 27;
+const SET_TPS43_CURSOR_THRESHOLD = 28;
 
 const PERSIST_CONFIG_SUCCESS = 1;
 const PERSIST_CONFIG_CONFIG_TOO_BIG = 2;
@@ -215,6 +218,8 @@ document.addEventListener("DOMContentLoaded", function () {
     document.getElementById("tps43_drag_threshold_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_cursor_base_scale_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_scroll_base_scale_input").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_cursor_subthreshold_expiry_input").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_cursor_subthreshold_threshold_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("gpio_debounce_time_input").addEventListener("change", gpio_debounce_time_onchange);
     document.getElementById("macro_entry_duration_input").addEventListener("change", macro_entry_duration_onchange);
     for (let i = 0; i < NLAYERS; i++) {
@@ -326,8 +331,9 @@ async function load_from_device() {
 
         await send_feature_command(GET_TPS43_TUNING);
         const [tap_max_duration_ms, stationary_intent_threshold_ms, neutral_activation_threshold,
-            left_assisted_drag_axis_threshold, cursor_base_scale_q8, scroll_base_scale_q8] =
-            await read_config_feature([UINT32, UINT32, INT32, INT32, INT32, INT32]);
+            left_assisted_drag_axis_threshold, cursor_base_scale_q8, scroll_base_scale_q8,
+            subthreshold_cursor_expiry_ms, subthreshold_cursor_threshold] =
+            await read_config_feature([UINT32, UINT32, INT32, INT32, INT32, INT32, UINT16, UINT8]);
         config['tps43_tuning'] = {
             tap_max_duration_ms,
             stationary_intent_threshold_ms,
@@ -335,6 +341,8 @@ async function load_from_device() {
             left_assisted_drag_axis_threshold,
             cursor_base_scale_q8,
             scroll_base_scale_q8,
+            subthreshold_cursor_expiry_ms,
+            subthreshold_cursor_threshold,
         };
 
         for (let i = 0; i < mapping_count; i++) {
@@ -469,6 +477,12 @@ async function save_to_device() {
     document.getElementById('save_to_device_checkmark').classList.add('d-none');
 
     try {
+        const tps43_tuning = config['tps43_tuning'];
+        if (!Number.isInteger(tps43_tuning['subthreshold_cursor_threshold']) ||
+            tps43_tuning['subthreshold_cursor_threshold'] < 1 ||
+            tps43_tuning['subthreshold_cursor_threshold'] > 255) {
+            throw new Error('Sub-threshold cursor threshold must be between 1 and 255.');
+        }
         await send_feature_command(SUSPEND);
         const flags = (config['ignore_auth_dev_inputs'] ? IGNORE_AUTH_DEV_INPUTS_FLAG : 0) |
             (config['gpio_output_mode'] ? GPIO_OUTPUT_MODE_FLAG : 0) |
@@ -483,7 +497,6 @@ async function save_to_device() {
             [UINT8, config['our_descriptor_number']],
             [UINT8, config['macro_entry_duration'] - 1],
         ]);
-        const tps43_tuning = config['tps43_tuning'];
         if (tps43_tuning['stationary_intent_threshold_ms'] >= tps43_tuning['tap_max_duration_ms']) {
             throw new Error('Stationary intent threshold must be shorter than tap duration.');
         }
@@ -494,6 +507,10 @@ async function save_to_device() {
             [INT32, tps43_tuning['left_assisted_drag_axis_threshold']],
             [INT32, tps43_tuning['cursor_base_scale_q8']],
             [INT32, tps43_tuning['scroll_base_scale_q8']],
+            [UINT16, tps43_tuning['subthreshold_cursor_expiry_ms']],
+        ]);
+        await send_feature_command(SET_TPS43_CURSOR_THRESHOLD, [
+            [UINT8, tps43_tuning['subthreshold_cursor_threshold']],
         ]);
         await send_feature_command(CLEAR_MAPPING);
 
@@ -681,6 +698,8 @@ function set_config_ui_state() {
     document.getElementById('tps43_drag_threshold_input').value = tps43_tuning['left_assisted_drag_axis_threshold'];
     document.getElementById('tps43_cursor_base_scale_input').value = tps43_tuning['cursor_base_scale_q8'];
     document.getElementById('tps43_scroll_base_scale_input').value = tps43_tuning['scroll_base_scale_q8'];
+    document.getElementById('tps43_cursor_subthreshold_expiry_input').value = tps43_tuning['subthreshold_cursor_expiry_ms'];
+    document.getElementById('tps43_cursor_subthreshold_threshold_input').value = tps43_tuning['subthreshold_cursor_threshold'];
 }
 
 function set_mappings_ui_state() {
@@ -763,6 +782,11 @@ function set_expressions_ui_state() {
 }
 
 function set_ui_state() {
+    // Version 21's threshold SET value overlapped the feature-report CRC.
+    // Ignore that unreliable saved value when importing older JSON configs.
+    if (config['version'] == 21 && config['tps43_tuning'] !== undefined) {
+        config['tps43_tuning']['subthreshold_cursor_threshold'] = DEFAULT_TPS43_TUNING['subthreshold_cursor_threshold'];
+    }
     if (config['version'] == 3) {
         config['unmapped_passthrough_layers'] = config['unmapped_passthrough'] ? [0] : [];
         delete config['unmapped_passthrough'];
@@ -815,6 +839,12 @@ function set_ui_state() {
     }
     if (config['tps43_tuning'] === undefined) {
         config['tps43_tuning'] = structuredClone(DEFAULT_TPS43_TUNING);
+    }
+    if (config['tps43_tuning']['subthreshold_cursor_expiry_ms'] === undefined) {
+        config['tps43_tuning']['subthreshold_cursor_expiry_ms'] = DEFAULT_TPS43_TUNING['subthreshold_cursor_expiry_ms'];
+    }
+    if (config['tps43_tuning']['subthreshold_cursor_threshold'] === undefined) {
+        config['tps43_tuning']['subthreshold_cursor_threshold'] = DEFAULT_TPS43_TUNING['subthreshold_cursor_threshold'];
     }
     if (config['version'] < CONFIG_VERSION) {
         config['version'] = CONFIG_VERSION;
@@ -1041,7 +1071,7 @@ function add_crc(data) {
 }
 
 function check_json_version(config_version) {
-    if (!([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].includes(config_version))) {
+    if (!([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22].includes(config_version))) {
         throw new Error("Incompatible version.");
     }
 }
@@ -1057,7 +1087,7 @@ async function check_device_version() {
     // device because it could be version X, ignore our GET_CONFIG call with version Y and
     // just happen to have Y at the right place in the buffer from some previous call done
     // by some other software.
-    for (const version of [CONFIG_VERSION, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
+    for (const version of [CONFIG_VERSION, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
         await send_feature_command(GET_CONFIG, [], version);
         const [received_version] = await read_config_feature([UINT8]);
         if (received_version == version) {
@@ -1449,10 +1479,12 @@ function tps43_tuning_onchange() {
         ['left_assisted_drag_axis_threshold', 'tps43_drag_threshold_input', 1],
         ['cursor_base_scale_q8', 'tps43_cursor_base_scale_input', 0],
         ['scroll_base_scale_q8', 'tps43_scroll_base_scale_input', 0],
+        ['subthreshold_cursor_expiry_ms', 'tps43_cursor_subthreshold_expiry_input', 1, 65535],
+        ['subthreshold_cursor_threshold', 'tps43_cursor_subthreshold_threshold_input', 1, 255],
     ];
-    for (const [key, element_id, minimum] of fields) {
+    for (const [key, element_id, minimum, maximum] of fields) {
         let value = parseInt(document.getElementById(element_id).value, 10);
-        if (isNaN(value) || value < minimum) {
+        if (isNaN(value) || value < minimum || (maximum !== undefined && value > maximum)) {
             value = DEFAULT_TPS43_TUNING[key];
             document.getElementById(element_id).value = value;
         }

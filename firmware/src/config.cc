@@ -11,8 +11,11 @@
 #include "remapper.h"
 #include "tps43_tuning_config.h"
 
-const uint8_t CONFIG_VERSION = 19;
-static_assert(sizeof(persist_config_v19_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockSize);
+const uint8_t CONFIG_VERSION = 22;
+static_assert(sizeof(persist_config_v19_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockV1Size);
+static_assert(sizeof(persist_config_v20_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockV2Size);
+static_assert(sizeof(persist_config_v21_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockSize);
+static_assert(sizeof(persist_config_v22_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockSize);
 
 const uint8_t CONFIG_FLAG_UNMAPPED_PASSTHROUGH = 0x01;
 const uint8_t CONFIG_FLAG_UNMAPPED_PASSTHROUGH_MASK = 0b00001111;
@@ -636,6 +639,40 @@ void load_config_v19(const uint8_t* persisted_config) {
     load_config_v18_or_v19(persisted_config, &config->base, sizeof(persist_config_v19_t));
 }
 
+void load_config_v20(const uint8_t* persisted_config) {
+    const persist_config_v20_t* config = (const persist_config_v20_t*) persisted_config;
+    DualTps43Tuning tuning;
+    if (!decode_tps43_tuning(config->tps43_tuning, sizeof(config->tps43_tuning), &tuning)) {
+        printf("invalid TPS43 tuning block; using production defaults\n");
+        tuning = production_tuning();
+    }
+    set_configured_tps43_tuning(tuning);
+    load_config_v18_or_v19(persisted_config, &config->base, sizeof(persist_config_v20_t));
+}
+
+void load_config_v21(const uint8_t* persisted_config) {
+    const persist_config_v21_t* config = (const persist_config_v21_t*) persisted_config;
+    DualTps43Tuning tuning;
+    if (!decode_tps43_tuning(config->tps43_tuning, sizeof(config->tps43_tuning), &tuning)) {
+        printf("invalid TPS43 tuning block; using production defaults\n");
+        tuning = production_tuning();
+    }
+    migrate_tps43_tuning_v21(&tuning);
+    set_configured_tps43_tuning(tuning);
+    load_config_v18_or_v19(persisted_config, &config->base, sizeof(persist_config_v21_t));
+}
+
+void load_config_v22(const uint8_t* persisted_config) {
+    const persist_config_v22_t* config = (const persist_config_v22_t*) persisted_config;
+    DualTps43Tuning tuning;
+    if (!decode_tps43_tuning(config->tps43_tuning, sizeof(config->tps43_tuning), &tuning)) {
+        printf("invalid TPS43 tuning block; using production defaults\n");
+        tuning = production_tuning();
+    }
+    set_configured_tps43_tuning(tuning);
+    load_config_v18_or_v19(persisted_config, &config->base, sizeof(persist_config_v22_t));
+}
+
 void load_config(const uint8_t* persisted_config) {
     if (!checksum_ok(persisted_config, PERSISTED_CONFIG_SIZE) || !persisted_version_ok(persisted_config)) {
         return;
@@ -708,7 +745,18 @@ void load_config(const uint8_t* persisted_config) {
         return;
     }
 
-    load_config_v19(persisted_config);
+    if (version == 19) {
+        load_config_v19(persisted_config);
+        return;
+    }
+
+    if (version == 20) {
+        load_config_v20(persisted_config);
+    } else if (version == 21) {
+        load_config_v21(persisted_config);
+    } else {
+        load_config_v22(persisted_config);
+    }
 }
 
 void fill_get_config(get_config_t* config) {
@@ -1024,11 +1072,19 @@ void handle_set_report1(uint8_t report_id, uint8_t const* buffer, uint16_t bufsi
                     break;
                 }
                 case ConfigCommand::SET_TPS43_TUNING: {
-                    const tps43_runtime_tuning_t* controls = (const tps43_runtime_tuning_t*) config_buffer->data;
+                    const tps43_runtime_tuning_set_t* controls = (const tps43_runtime_tuning_set_t*) config_buffer->data;
                     if (set_configured_tps43_runtime_tuning(*controls)) {
                         tps43_tuning_updated = true;
                     } else {
                         printf("invalid TPS43 runtime tuning; retaining previous profile\n");
+                    }
+                    break;
+                }
+                case ConfigCommand::SET_TPS43_CURSOR_THRESHOLD: {
+                    if (set_configured_tps43_cursor_threshold(config_buffer->data[0])) {
+                        tps43_tuning_updated = true;
+                    } else {
+                        printf("invalid TPS43 cursor threshold; retaining previous profile\n");
                     }
                     break;
                 }

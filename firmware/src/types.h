@@ -34,6 +34,7 @@ enum class ConfigCommand : int8_t {
     GET_QUIRK = 25,
     GET_TPS43_TUNING = 26,
     SET_TPS43_TUNING = 27,
+    SET_TPS43_CURSOR_THRESHOLD = 28,
 };
 
 struct usage_def_t {
@@ -319,7 +320,22 @@ struct __attribute__((packed)) persist_config_v19_t {
     uint8_t tps43_tuning[78];
 };
 
-typedef persist_config_v19_t persist_config_t;
+struct __attribute__((packed)) persist_config_v20_t {
+    persist_config_v18_t base;
+    uint8_t tps43_tuning[82];
+};
+
+struct __attribute__((packed)) persist_config_v21_t {
+    persist_config_v18_t base;
+    uint8_t tps43_tuning[83];
+};
+
+struct __attribute__((packed)) persist_config_v22_t {
+    persist_config_v18_t base;
+    uint8_t tps43_tuning[83];
+};
+
+typedef persist_config_v22_t persist_config_t;
 
 struct __attribute__((packed)) get_config_t {
     uint8_t version;
@@ -357,8 +373,23 @@ struct __attribute__((packed)) tps43_runtime_tuning_t {
     int32_t left_assisted_drag_axis_threshold;
     int32_t cursor_base_scale_q8;
     int32_t scroll_base_scale_q8;
+    uint16_t subthreshold_cursor_expiry_ms;
+    uint8_t subthreshold_cursor_threshold;
 };
-static_assert(sizeof(tps43_runtime_tuning_t) == 24);
+static_assert(sizeof(tps43_runtime_tuning_t) == 27);
+
+// SET reports have only 26 payload bytes before the CRC. Send the threshold
+// through its dedicated command instead of extending this payload.
+struct __attribute__((packed)) tps43_runtime_tuning_set_t {
+    uint32_t tap_max_duration_ms;
+    uint32_t stationary_intent_threshold_ms;
+    int32_t neutral_activation_threshold;
+    int32_t left_assisted_drag_axis_threshold;
+    int32_t cursor_base_scale_q8;
+    int32_t scroll_base_scale_q8;
+    uint16_t subthreshold_cursor_expiry_ms;
+};
+static_assert(sizeof(tps43_runtime_tuning_set_t) == 26);
 
 struct __attribute__((packed)) get_indexed_t {
     uint32_t requested_index;

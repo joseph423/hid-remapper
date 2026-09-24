@@ -300,9 +300,13 @@ int main() {
 
     if (!right_tps43_driver.initialize()) {
         printf("TPS43 Right-pad runtime initialization failed\n");
+    } else if (!right_tps43_driver.request_active_report_interval(kTps43DefaultActiveReportIntervalMs)) {
+        printf("TPS43 Right-pad default report interval request failed\n");
     }
     if (!left_tps43_driver.initialize()) {
         printf("TPS43 Left-pad runtime initialization failed\n");
+    } else if (!left_tps43_driver.request_active_report_interval(kTps43DefaultActiveReportIntervalMs)) {
+        printf("TPS43 Left-pad default report interval request failed\n");
     }
 
     tps43_timing_capture.begin();
@@ -369,6 +373,12 @@ int main() {
         }
         tps43_cdc_stdio_flush();
         tps43_timing_capture.poll_serial();
+        uint16_t requested_report_interval_ms = 0;
+        if (tps43_timing_capture.take_active_report_interval_request(requested_report_interval_ms) &&
+            !right_tps43_driver.request_active_report_interval(requested_report_interval_ms)) {
+            printf("TPS43 active_report_interval_request_ms=%u result=rejected\n",
+                requested_report_interval_ms);
+        }
         if (boot_protocol_updated) {
             parse_our_descriptor();
             boot_protocol_updated = false;

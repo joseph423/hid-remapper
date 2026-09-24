@@ -16,6 +16,10 @@ bool qualifies_left_assisted_drag(const PadState& right, int32_t threshold) {
     return absolute_x >= threshold || absolute_y >= threshold;
 }
 
+bool has_cursor_input(const PadState& pad) {
+    return pad.movement_reported || pad.relative_x != 0 || pad.relative_y != 0;
+}
+
 }  // namespace
 
 DualTps43Fsm::DualTps43Fsm(DualTps43Tuning tuning)
@@ -42,12 +46,20 @@ void DualTps43Fsm::reset() {
     right_latched_saw_inactive_ = false;
     right_latched_drop_session_id_ = 0;
     cursor_motion_ = {};
+    pending_cursor_x_ = 0;
+    pending_cursor_y_ = 0;
+    pending_cursor_since_us_ = 0;
     scroll_motion_ = {};
     scroll_source_this_cycle_ = ScrollSource::None;
 }
 
 LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
     scroll_source_this_cycle_ = ScrollSource::None;
+    if (snapshot.right.touch_started || snapshot.right.touch_ended) {
+        pending_cursor_x_ = 0;
+        pending_cursor_y_ = 0;
+        pending_cursor_since_us_ = 0;
+    }
 
     // Preserve movement history before a new session can reset it. Touch-order
     // decisions need to know whether Right was already moving in the preceding
@@ -227,7 +239,7 @@ LogicalActions DualTps43Fsm::process_left_scroll(const DualPadSnapshot& snapshot
 
     LogicalActions actions;
     add_left_scroll(snapshot.left, actions);
-    if (snapshot.right.finger_count == 1 && snapshot.right.movement_reported) {
+    if (snapshot.right.finger_count == 1 && has_cursor_input(snapshot.right)) {
         add_right_cursor(snapshot.right, actions);
     }
     if (right_tap) {
@@ -251,7 +263,7 @@ LogicalActions DualTps43Fsm::process_left_assisted_drag(const DualPadSnapshot& s
     }
 
     LogicalActions actions;
-    if (snapshot.right.active && snapshot.right.finger_count == 1 && snapshot.right.movement_reported) {
+    if (snapshot.right.active && snapshot.right.finger_count == 1 && has_cursor_input(snapshot.right)) {
         add_right_cursor(snapshot.right, actions);
     }
     return actions;
@@ -288,7 +300,7 @@ LogicalActions DualTps43Fsm::process_right_latched_drag(const DualPadSnapshot& s
         snapshot.right.three_finger_delta_valid) {
         actions.cursor_x = snapshot.right.three_finger_delta_x;
         actions.cursor_y = snapshot.right.three_finger_delta_y;
-    } else if (snapshot.right.active && snapshot.right.finger_count == 1 && snapshot.right.movement_reported) {
+    } else if (snapshot.right.active && snapshot.right.finger_count == 1 && has_cursor_input(snapshot.right)) {
         add_right_cursor(snapshot.right, actions);
     }
     return actions;
@@ -397,7 +409,7 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
     }
 
     LogicalActions actions;
-    if (snapshot.right.active && snapshot.right.finger_count == 1 && snapshot.right.movement_reported) {
+    if (snapshot.right.active && snapshot.right.finger_count == 1 && has_cursor_input(snapshot.right)) {
         add_right_cursor(snapshot.right, actions);
     } else if (snapshot.right.active && snapshot.right.finger_count == 2 && snapshot.right.movement_reported &&
                snapshot.right.scroll_gesture && (!snapshot.left.active || left_was_stationary || left_stationary_now)) {
@@ -418,8 +430,39 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
 }
 
 void DualTps43Fsm::add_right_cursor(const PadState& right, LogicalActions& actions) {
-    actions.cursor_x += right.relative_x;
-    actions.cursor_y += right.relative_y;
+    const uint64_t now_us = right.timestamp_us;
+    if ((pending_cursor_x_ != 0 || pending_cursor_y_ != 0) && now_us >= pending_cursor_since_us_ &&
+        now_us - pending_cursor_since_us_ > tuning_.subthreshold_cursor_expiry_us) {
+        pending_cursor_x_ = 0;
+        pending_cursor_y_ = 0;
+        pending_cursor_since_us_ = 0;
+    }
+
+    if (right.movement_reported) {
+        actions.cursor_x += saturate_int32(pending_cursor_x_ + right.relative_x);
+        actions.cursor_y += saturate_int32(pending_cursor_y_ + right.relative_y);
+        pending_cursor_x_ = 0;
+        pending_cursor_y_ = 0;
+        pending_cursor_since_us_ = 0;
+        return;
+    }
+
+    if (pending_cursor_x_ == 0 && pending_cursor_y_ == 0) {
+        pending_cursor_since_us_ = now_us;
+    }
+    pending_cursor_x_ += right.relative_x;
+    pending_cursor_y_ += right.relative_y;
+    const int32_t threshold = tuning_.subthreshold_cursor_threshold;
+    if (pending_cursor_x_ <= -threshold || pending_cursor_x_ >= threshold ||
+        pending_cursor_y_ <= -threshold || pending_cursor_y_ >= threshold) {
+        actions.cursor_x += saturate_int32(pending_cursor_x_);
+        actions.cursor_y += saturate_int32(pending_cursor_y_);
+        pending_cursor_x_ = 0;
+        pending_cursor_y_ = 0;
+        pending_cursor_since_us_ = 0;
+    } else if (pending_cursor_x_ == 0 && pending_cursor_y_ == 0) {
+        pending_cursor_since_us_ = 0;
+    }
 }
 
 void DualTps43Fsm::add_left_scroll(const PadState& left, LogicalActions& actions) {

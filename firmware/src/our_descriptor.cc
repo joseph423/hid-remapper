@@ -1,4 +1,5 @@
 #include <cstring>
+#include <cstdio>
 
 #include "globals.h"
 #include "our_descriptor.h"
@@ -626,6 +627,10 @@ uint8_t const our_report_descriptor_xac_compat[] = {
 
 void kb_mouse_handle_set_report(uint8_t report_id, const uint8_t* buffer, uint16_t reqlen) {
     if (report_id == REPORT_ID_MULTIPLIER && reqlen >= 1) {
+#if defined(TPS43_TRACE_WHEEL_MULTIPLIER_REQUESTS)
+        printf("TPS43 wheel_multiplier request=SET value=0x%02x current=0x%02x\n",
+            buffer[0], resolution_multiplier);
+#endif
         if (resolution_multiplier != buffer[0]) {
             reset_tps43_fractional_output();
         }
@@ -642,6 +647,9 @@ bool kb_mouse_set_report_synchronous(uint8_t report_id) {
 uint16_t kb_mouse_handle_get_report(uint8_t report_id, uint8_t* buffer, uint16_t reqlen) {
     if (report_id == REPORT_ID_MULTIPLIER && reqlen >= 1) {
         memcpy(buffer, &resolution_multiplier, 1);
+#if defined(TPS43_TRACE_WHEEL_MULTIPLIER_REQUESTS)
+        printf("TPS43 wheel_multiplier request=GET value=0x%02x\n", resolution_multiplier);
+#endif
         return 1;
     }
     return 0;

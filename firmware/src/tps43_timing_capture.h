@@ -47,6 +47,9 @@ class Tps43TimingCapture final {
     // M and Enter control the staged timing capture.
     void poll_serial();
 
+    // Consumes one requested 8 ms test / 13 ms restore command.
+    bool take_active_report_interval_request(uint16_t& interval_ms);
+
     // Returns whether the next tick should force one operator-requested read.
     bool read_requested() const;
 
@@ -110,6 +113,8 @@ class Tps43TimingCapture final {
     InputSession right_input_session_;
     bool manual_debug_enabled_ = false;
     uint64_t last_manual_debug_us_ = 0;
+    bool active_report_interval_request_pending_ = false;
+    uint16_t requested_active_report_interval_ms_ = 0;
 };
 
 #endif

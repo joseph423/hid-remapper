@@ -4,6 +4,7 @@
 #include <array>
 #include <cassert>
 #include <cstdio>
+#include <vector>
 
 uint64_t fake_now = 100;
 bool fake_rdy = false;
@@ -18,6 +19,8 @@ std::array<uint8_t, 10> compact;
 std::array<uint8_t, 35> contacts;
 uint16_t address = 0;
 unsigned address_bytes = 0, offset = 0, closes = 0, resets_seen = 0;
+std::vector<std::vector<uint8_t>> report_interval_writes;
+std::vector<uint8_t> pending_write;
 bool nack_once = false;
 
 Tps43Iqs5xxDriver make_driver();
@@ -160,6 +163,45 @@ void test_delayed_fifo_poll_and_reset_not_ready() {
     assert(acquire(driver));
 }
 
+void test_active_report_interval_test_and_restore() {
+    auto driver = make_driver();
+    assert(driver.request_active_report_interval(8));
+    for (int i = 0; i < 20; ++i)
+        tick(driver);
+    assert(report_interval_writes.empty());  // Configuration waits for RDY.
+
+    fake_rdy = true;
+    for (int i = 0; i < 100 && driver.timing().active_report_interval_ms != 8; ++i)
+        tick(driver);
+    fake_rdy = false;
+    assert(driver.timing().active_report_interval_ms == 8);
+    assert(report_interval_writes.size() == 1);
+    assert((report_interval_writes[0] == std::vector<uint8_t>{ 0, 8 }));
+    assert(!driver.service(fake_now));  // A setting write is not an input report.
+
+    assert(driver.request_active_report_interval(13));
+    for (int i = 0; i < 20; ++i)
+        tick(driver);
+    assert(report_interval_writes.size() == 1);
+    fake_rdy = true;
+    for (int i = 0; i < 100 && driver.timing().active_report_interval_ms != 13; ++i)
+        tick(driver);
+    fake_rdy = false;
+    assert(driver.timing().active_report_interval_ms == 13);
+    assert(report_interval_writes.size() == 2);
+    assert((report_interval_writes[1] == std::vector<uint8_t>{ 0, 13 }));
+    assert(!driver.service(fake_now));
+    assert(driver.request_active_report_interval(7));
+    fake_rdy = true;
+    for (int i = 0; i < 100 && driver.timing().active_report_interval_ms != 7; ++i)
+        tick(driver);
+    fake_rdy = false;
+    assert(driver.timing().active_report_interval_ms == 7);
+    assert(report_interval_writes.size() == 3);
+    assert((report_interval_writes[2] == std::vector<uint8_t>{ 0, 7 }));
+    assert(!driver.request_active_report_interval(50));
+}
+
 Tps43Iqs5xxDriver make_driver() {
     fake_now = 100;
     fake_rdy = false;
@@ -169,6 +211,8 @@ Tps43Iqs5xxDriver make_driver() {
     hw0.raw_intr_stat = hw0.tx_abrt_source = 0;
     address = 0;
     address_bytes = offset = closes = resets_seen = 0;
+    report_interval_writes.clear();
+    pending_write.clear();
     nack_once = false;
     compact = { 0, 1, 0, 0, 1, 1, 0xff, 0xfe, 0, 3 };
     contacts = {};
@@ -199,11 +243,20 @@ void step_bus() {
         address = static_cast<uint16_t>((address << 8) | (command & 0xff));
         ++address_bytes;
     } else {
-        assert(address == 0xEEEE && (command & 0xff) == 1);
-        ++closes;
+        if (address == 0xEEEE) {
+            assert((command & 0xff) == 1);
+            ++closes;
+        } else {
+            assert(address == 0x057A);
+            pending_write.push_back(static_cast<uint8_t>(command & 0xff));
+        }
     }
     if (command & I2C_IC_DATA_CMD_STOP_BITS) {
         hw0.raw_intr_stat |= I2C_IC_RAW_INTR_STAT_STOP_DET_BITS;
+        if (address == 0x057A) {
+            report_interval_writes.push_back(pending_write);
+            pending_write.clear();
+        }
         address_bytes = offset = 0;
     }
 }
@@ -275,5 +328,6 @@ int main() {
     test_forced_wake_and_fault_rejection();
     test_diagnostic_same_window_and_clock_rollover();
     test_delayed_fifo_poll_and_reset_not_ready();
+    test_active_report_interval_test_and_restore();
     puts("asynchronous driver tests passed");
 }

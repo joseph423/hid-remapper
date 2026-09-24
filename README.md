@@ -36,7 +36,7 @@ If you can't use the browser-based configuration tool, there's also a [command-l
 
 ### Project-local TPS43 configuration tool
 
-The dual-TPS43 firmware in this project uses the project-specific configuration version 19 and TPS43 tuning commands. Use the local tool in this repository; the official online tool does not support these commands.
+The dual-TPS43 firmware in this project uses the project-specific configuration version 22 and TPS43 tuning commands. Use the local tool in this repository; the official online tool does not support these commands.
 
 From the repository root, start a local web server:
 
@@ -95,6 +95,8 @@ cmake ..
 # PICO_BOARD=remapper cmake ..
 make
 ```
+
+On Joseph's macOS build environment, reuse the existing `firmware/build` directory or explicitly select Arm GNU Toolchain 15.3.1 for C, C++, and ASM when configuring a fresh build directory. Automatic selection may choose Homebrew GCC 16.2.0, which lacks `nosys.specs` in this setup; keep that compiler installed for other uses.
 
 To compile the nRF52 firmware, you can either follow [Nordic's setup instructions](https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/installation.html) and then `west build -b seeed_xiao_nrf52840` to compile the firmware, or you can use Docker with a command like this (start from the top level of the repository or adjust the path accordingly):
 

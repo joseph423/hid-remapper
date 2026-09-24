@@ -4,12 +4,14 @@
 #include <hardware/resets.h>
 #include <pico/time.h>
 #include <algorithm>
+#include <cstdio>
 
 namespace {
 
 constexpr uint16_t kCompactReportRegister = 0x000C;
 constexpr uint16_t kContactReportRegister = 0x0016;
 constexpr uint16_t kEndCommunicationRegister = 0xEEEE;
+constexpr uint16_t kActiveReportIntervalRegister = 0x057A;
 // A fault deadline, not a report-rate/tuning target. Historical forced reads
 // reached 13 ms. All waits below yield to USB; one acquisition gets 20 ms total.
 constexpr uint64_t kAcquisitionDeadlineUs = 20000;
@@ -76,7 +78,19 @@ void Tps43Iqs5xxDriver::poll() {
         }
         const uint64_t now = time_us_64();
         if (stage_ == Stage::Idle && !sample_ready_ && now >= retry_after_us_ &&
-            (forced_read_requested_ || gpio_get(config_.rdy_pin))) {
+            (active_rate_request_pending_ ? gpio_get(config_.rdy_pin)
+                                          : (forced_read_requested_ || gpio_get(config_.rdy_pin)))) {
+            if (active_rate_request_pending_) {
+                const uint8_t interval_bytes[] = {
+                    static_cast<uint8_t>(active_rate_request_ms_ >> 8),
+                    static_cast<uint8_t>(active_rate_request_ms_ & 0xff),
+                };
+                active_rate_in_progress_ms_ = active_rate_request_ms_;
+                active_rate_request_pending_ = false;
+                deadline_us_ = now + kAcquisitionDeadlineUs;
+                start_write_transfer(kActiveReportIntervalRegister, interval_bytes, 2, Stage::RateWrite);
+                return;
+            }
             forced_active_ = forced_read_requested_;
             diagnostic_active_ = diagnostic_requested_;
             forced_read_requested_ = diagnostic_requested_ = false;
@@ -166,6 +180,16 @@ void Tps43Iqs5xxDriver::poll() {
                 timing_.last_acquisition_us = static_cast<uint32_t>(now - acquisition_started_us_);
                 stage_ = Stage::Idle;
                 break;
+            case Stage::RateWrite:
+                start_transfer(kEndCommunicationRegister, 0, Stage::RateClose);
+                break;
+            case Stage::RateClose:
+                timing_.active_report_interval_ms = active_rate_in_progress_ms_;
+                printf("TPS43 pad=%s active_report_interval_ms=%u result=applied persistence=volatile\n",
+                    config_.bus == i2c0 ? "right" : "left",
+                    active_rate_in_progress_ms_);
+                stage_ = Stage::Idle;
+                break;
             case Stage::RecoverClose:
                 stage_ = Stage::Idle;
                 retry_after_us_ = now + kRetryCooldownUs;
@@ -186,6 +210,19 @@ void Tps43Iqs5xxDriver::request_forced_read(bool diagnose_contact_mismatch) {
     diagnostic_requested_ = diagnose_contact_mismatch;
 }
 
+bool Tps43Iqs5xxDriver::request_active_report_interval(uint16_t interval_ms) {
+    if ((interval_ms != kTps43SevenMsActiveReportIntervalMs &&
+            interval_ms != kTps43DefaultActiveReportIntervalMs &&
+            interval_ms != kTps43BaselineActiveReportIntervalMs) ||
+        active_rate_request_pending_ ||
+        stage_ == Stage::RateWrite || stage_ == Stage::RateClose) {
+        return false;
+    }
+    active_rate_request_ms_ = interval_ms;
+    active_rate_request_pending_ = true;
+    return true;
+}
+
 Tps43Sample Tps43Iqs5xxDriver::sample() const {
     return sample_;
 }
@@ -197,6 +234,24 @@ const Tps43ServiceTiming& Tps43Iqs5xxDriver::timing() const {
 void Tps43Iqs5xxDriver::start_transfer(uint16_t address, uint8_t length, Stage stage) {
     register_address_ = address;
     read_length_ = length;
+    write_length_ = 0;
+    commands_sent_ = bytes_received_ = 0;
+    transaction_started_us_ = time_us_64();
+    stage_ = stage;
+    (void) static_cast<uint32_t>(config_.bus->hw->clr_stop_det);
+}
+
+void Tps43Iqs5xxDriver::start_write_transfer(
+    uint16_t address,
+    const uint8_t* data,
+    uint8_t length,
+    Stage stage) {
+    register_address_ = address;
+    read_length_ = 0;
+    write_length_ = length;
+    for (uint8_t i = 0; i < length; ++i) {
+        write_data_[i] = data[i];
+    }
     commands_sent_ = bytes_received_ = 0;
     transaction_started_us_ = time_us_64();
     stage_ = stage;
@@ -214,7 +269,7 @@ Tps43Iqs5xxDriver::TransferResult Tps43Iqs5xxDriver::poll_transfer() {
     for (uint8_t n = 0; n < kFifoDepth && bytes_received_ < read_length_ && hw->rxflr; ++n) {
         data_[bytes_received_++] = static_cast<uint8_t>(hw->data_cmd);
     }
-    const uint8_t total_commands = read_length_ ? read_length_ + 2 : 3;
+    const uint8_t total_commands = read_length_ ? read_length_ + 2 : (write_length_ ? write_length_ + 2 : 3);
     for (uint8_t n = 0; n < kFifoDepth && commands_sent_ < total_commands && hw->txflr < kFifoDepth; ++n) {
         uint32_t command;
         if (commands_sent_ == 0) {
@@ -229,6 +284,8 @@ Tps43Iqs5xxDriver::TransferResult Tps43Iqs5xxDriver::poll_transfer() {
             if (commands_sent_ == 2) {
                 command |= I2C_IC_DATA_CMD_RESTART_BITS;
             }
+        } else if (write_length_ && commands_sent_ < write_length_ + 2) {
+            command = write_data_[commands_sent_ - 2];
         } else {
             command = 1;  // End-communication payload.
         }
@@ -281,11 +338,13 @@ void Tps43Iqs5xxDriver::restore_controller() {
 }
 
 void Tps43Iqs5xxDriver::decode_compact() {
+    next_sample_.previous_cycle_time_ms = data_[0];
     next_sample_.active = data_[5] != 0;
     next_sample_.finger_count = data_[5];
     next_sample_.relative_x = static_cast<int16_t>(read_big_endian_u16(&data_[6]));
     next_sample_.relative_y = static_cast<int16_t>(read_big_endian_u16(&data_[8]));
     next_sample_.movement_reported = (data_[4] & 0x01) != 0;
+    next_sample_.report_rate_missed = (data_[4] & 0x08) != 0;
     next_sample_.single_tap = (data_[1] & 0x01) != 0;
     next_sample_.two_finger_tap = (data_[2] & 0x01) != 0;
     next_sample_.scroll_gesture = (data_[2] & 0x02) != 0;

@@ -21,6 +21,7 @@ DualTps43Tuning motion_tuning() {
     tuning.scroll_gain = { 256, 768, 1000, 256, 10000 };
     tuning.scroll_momentum = { 256, 256, 192, 100 };
     tuning.left_assisted_drag_axis_threshold = 2;
+    tuning.subthreshold_cursor_threshold = 2;
     return tuning;
 }
 
@@ -141,6 +142,78 @@ int main() {
             "faster cursor input must receive greater gain for equal displacement");
         require(slow_action.scroll_x == 0 && fast_action.scroll_x == 0,
             "cursor gain must not create scroll output");
+    });
+
+    run_case("MOTION-14 accumulates-subthreshold-cursor-deltas-per-axis", [] {
+        Harness harness;
+        harness.step(inactive(), one_finger(), 10000);
+        Tps43Sample first_delta = one_finger(1, 1);
+        first_delta.movement_reported = false;
+        const LogicalActions first_action = harness.step(inactive(), first_delta, 10000);
+        require(first_action.cursor_x == 0 && first_action.cursor_y == 0,
+            "one-count diagonal delta must wait for confirmation");
+
+        Tps43Sample second_delta = one_finger(1, 1);
+        second_delta.movement_reported = false;
+        const LogicalActions second_action = harness.step(inactive(), second_delta, 10000);
+        require(second_action.cursor_x > 0 && second_action.cursor_y > 0,
+            "consistent diagonal single-count deltas must combine and reach the cursor");
+        require(second_action.scroll_x == 0 && second_action.scroll_y == 0,
+            "accumulated cursor input must not become scroll output");
+    });
+
+    run_case("MOTION-15 cancels-reversals-and-forwards-classified-cursor-deltas", [] {
+        Harness larger_delta;
+        larger_delta.step(inactive(), one_finger(), 10000);
+        Tps43Sample positive_delta = one_finger(1, 0);
+        positive_delta.movement_reported = false;
+        const LogicalActions pending_action = larger_delta.step(inactive(), positive_delta, 10000);
+        require(pending_action.cursor_x == 0, "first unclassified single-count delta must remain pending");
+        Tps43Sample reverse_delta = one_finger(-1, 0);
+        reverse_delta.movement_reported = false;
+        const LogicalActions reversed_action = larger_delta.step(inactive(), reverse_delta, 10000);
+        require(reversed_action.cursor_x == 0,
+            "opposing single-count deltas must cancel instead of causing drift");
+
+        Harness classified_delta;
+        classified_delta.step(inactive(), one_finger(), 10000);
+        Tps43Sample sensor_classified_delta = one_finger(1, 0);
+        sensor_classified_delta.movement_reported = true;
+        const LogicalActions classified_action = classified_delta.step(inactive(), sensor_classified_delta, 10000);
+        require(classified_action.cursor_x > 0,
+            "movement-classified single-count delta must preserve existing cursor behavior");
+    });
+
+    run_case("MOTION-16 expires-stale-subthreshold-cursor-deltas", [] {
+        Harness harness;
+        harness.step(inactive(), one_finger(), 10000);
+        Tps43Sample first_delta = one_finger(1, 0);
+        first_delta.movement_reported = false;
+        harness.step(inactive(), first_delta, 10000);
+        Tps43Sample later_delta = one_finger(1, 0);
+        later_delta.movement_reported = false;
+        const LogicalActions later_action = harness.step(inactive(), later_delta, 60000);
+        require(later_action.cursor_x == 0,
+            "single-count deltas separated beyond the expiry window must not combine");
+    });
+
+    run_case("MOTION-17 honors-configured-subthreshold-cursor-threshold", [] {
+        DualTps43Tuning tuning = motion_tuning();
+        tuning.subthreshold_cursor_threshold = 3;
+        Harness harness(tuning);
+        harness.step(inactive(), one_finger(), 10000);
+
+        for (int i = 0; i < 2; i++) {
+            Tps43Sample delta = one_finger(1, 0);
+            delta.movement_reported = false;
+            const LogicalActions action = harness.step(inactive(), delta, 8000);
+            require(action.cursor_x == 0, "threshold 3 must hold the first two unclassified counts");
+        }
+
+        Tps43Sample third_delta = one_finger(1, 0);
+        third_delta.movement_reported = false;
+        const LogicalActions action = harness.step(inactive(), third_delta, 8000);
+        require(action.cursor_x > 0, "threshold 3 must emit once the accumulated axis reaches 3");
     });
 
     run_case("MOTION-02 slow-versus-fast-active-scroll-gain", [] {

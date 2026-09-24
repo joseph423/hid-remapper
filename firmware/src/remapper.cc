@@ -422,19 +422,70 @@ void set_mapping_from_config() {
     // narrower scope so their storage is released before rebuilding data that
     // depends on an attached device descriptor.
     {
-    std::unordered_map<uint64_t, std::vector<map_source_t>> reverse_mapping_map;  // hub_port+target -> sources list
     std::unordered_map<uint64_t, uint8_t> sticky_usage_map;
     std::unordered_map<uint64_t, uint8_t> tap_sticky_usage_map;
     std::unordered_map<uint64_t, uint8_t> hold_sticky_usage_map;
     std::unordered_set<uint64_t> tap_hold_usage_set;
     std::unordered_map<uint32_t, uint8_t> mapped_on_layers;  // usage -> layer mask
 
+    std::size_t reverse_mapping_count = 0;
+    std::size_t reverse_mapping_macro_count = 0;
+    std::size_t reverse_mapping_layer_count = 0;
+    auto clear_mapping_buffers = [](std::vector<reverse_mapping_t>& table) {
+        for (auto& mapping : table) {
+            mapping.sources.clear();
+            mapping.our_usages.clear();
+        }
+    };
+    clear_mapping_buffers(reverse_mapping);
+    clear_mapping_buffers(reverse_mapping_macros);
+    clear_mapping_buffers(reverse_mapping_layers);
+
+    // Group directly in the persistent tables so building a second full set of
+    // target/source vectors cannot overlap the final tables on the constrained heap.
+    auto find_or_add_mapping = [](std::vector<reverse_mapping_t>& table, std::size_t& active_count,
+                                  uint8_t hub_port, uint32_t target) -> reverse_mapping_t& {
+        for (std::size_t i = 0; i < active_count; i++) {
+            if ((table[i].hub_port == hub_port) && (table[i].target == target)) {
+                return table[i];
+            }
+        }
+
+        reverse_mapping_t* mapping;
+        if (active_count == table.size()) {
+            table.push_back({
+                .target = target,
+                .hub_port = hub_port,
+            });
+            mapping = &table.back();
+        } else {
+            mapping = &table[active_count];
+            mapping->target = target;
+            mapping->default_value = 0;
+            mapping->hub_port = hub_port;
+            mapping->is_relative = false;
+            mapping->sources.clear();
+            mapping->our_usages.clear();
+        }
+        active_count++;
+        return *mapping;
+    };
+    auto append_mapping_source = [&](uint8_t hub_port, uint32_t target, const map_source_t& source) {
+        if ((target & 0xFFFF0000) == MACRO_USAGE_PAGE) {
+            find_or_add_mapping(reverse_mapping_macros, reverse_mapping_macro_count, hub_port, target)
+                .sources.push_back(source);
+        } else if ((target & 0xFFFF0000) == LAYERS_USAGE_PAGE) {
+            find_or_add_mapping(reverse_mapping_layers, reverse_mapping_layer_count, hub_port, target)
+                .sources.push_back(source);
+        } else {
+            find_or_add_mapping(reverse_mapping, reverse_mapping_count, hub_port, target)
+                .sources.push_back(source);
+        }
+    };
+
     validate_expressions();
     invalidate_expr_state_ptr_cache();
 
-    reverse_mapping.clear();
-    reverse_mapping_macros.clear();
-    reverse_mapping_layers.clear();
     used_state_slots = 0;
     usage_state_ptr.clear();
     register_ptrs.clear();
@@ -479,7 +530,7 @@ void set_mapping_from_config() {
         }
 
         if (assign_state_slot(mapping.source_usage, source_port, false)) {
-            reverse_mapping_map[((uint64_t) target_port << 32) | mapping.target_usage].push_back((map_source_t) {
+            append_mapping_source(target_port, mapping.target_usage, (map_source_t) {
                 .usage = mapping.source_usage,
                 .scaling = mapping.scaling,
                 .sticky = (mapping.flags & MAPPING_FLAG_STICKY) != 0,
@@ -599,12 +650,20 @@ void set_mapping_from_config() {
         }
     }
 
+    // These lookup tables have been converted into the persistent runtime
+    // vectors above. Release their hash buckets before expanding passthrough
+    // mappings to reduce the rebuild's peak heap use.
+    decltype(sticky_usage_map){}.swap(sticky_usage_map);
+    decltype(tap_sticky_usage_map){}.swap(tap_sticky_usage_map);
+    decltype(hold_sticky_usage_map){}.swap(hold_sticky_usage_map);
+    decltype(tap_hold_usage_set){}.swap(tap_hold_usage_set);
+
     if (unmapped_passthrough_layer_mask) {
         for (auto const& [usage, usage_def] : our_usages_flat) {
             uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_on_layers[usage];
             if (unmapped_layers) {
                 if (assign_state_slot(usage, 0, false)) {
-                    reverse_mapping_map[usage].push_back((map_source_t) {
+                        append_mapping_source(0, usage, (map_source_t) {
                         .usage = usage,
                         .layer_mask = unmapped_layers,
                         .input_state = get_state_ptr(usage, 0),
@@ -618,7 +677,7 @@ void set_mapping_from_config() {
                 uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_on_layers[usage];
                 if (unmapped_layers) {
                     if (assign_state_slot(usage, 0, false)) {
-                        reverse_mapping_map[usage].push_back((map_source_t) {
+                        append_mapping_source(0, usage, (map_source_t) {
                             .usage = usage,
                             .layer_mask = unmapped_layers,
                             .input_state = get_state_ptr(usage, 0),
@@ -633,7 +692,7 @@ void set_mapping_from_config() {
                 uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_on_layers[usage];
                 if (unmapped_layers) {
                     if (assign_state_slot(usage, 0, false)) {
-                        reverse_mapping_map[usage].push_back((map_source_t) {
+                        append_mapping_source(0, usage, (map_source_t) {
                             .usage = usage,
                             .layer_mask = unmapped_layers,
                             .input_state = get_state_ptr(usage, 0),
@@ -644,24 +703,11 @@ void set_mapping_from_config() {
         }
     }
 
-    while (!reverse_mapping_map.empty()) {
-        // Remove the temporary lookup node before the final table grows. This
-        // keeps its node allocation out of the peak heap requirement for large
-        // valid passthrough configurations.
-        auto node = reverse_mapping_map.extract(reverse_mapping_map.begin());
-        uint64_t hub_port_target = node.key();
-        auto& sources = node.mapped();
-        uint8_t hub_port = (hub_port_target >> 32) & 0xFF;
-        uint32_t target = hub_port_target & 0xFFFFFFFF;
-        reverse_mapping_t rev_map = {
-            .target = target,
-            .hub_port = hub_port,
-            // Mapping construction expands passthrough sources before it knows
-            // their final target. Keep the handoff below move-only: copying
-            // either this vector or rev_map creates another full allocation
-            // and can prevent USB startup for valid large configurations.
-            .sources = std::move(sources),
-        };
+    // Passthrough expansion is the final consumer of this lookup table.
+    decltype(mapped_on_layers){}.swap(mapped_on_layers);
+
+    auto finalize_mapping = [](reverse_mapping_t& rev_map) {
+        uint32_t target = rev_map.target;
         if (our_descriptor->default_value != nullptr) {
             rev_map.default_value = our_descriptor->default_value(target);
             // This helps in cases where nothing is plugged in to provide state for a source
@@ -742,13 +788,18 @@ void set_mapping_from_config() {
                 }
             }
         }
-        if ((target & 0xFFFF0000) == MACRO_USAGE_PAGE) {
-            reverse_mapping_macros.push_back(std::move(rev_map));
-        } else if ((target & 0xFFFF0000) == LAYERS_USAGE_PAGE) {
-            reverse_mapping_layers.push_back(std::move(rev_map));
-        } else {
-            reverse_mapping.push_back(std::move(rev_map));
-        }
+    };
+    reverse_mapping.resize(reverse_mapping_count);
+    reverse_mapping_macros.resize(reverse_mapping_macro_count);
+    reverse_mapping_layers.resize(reverse_mapping_layer_count);
+    for (auto& mapping : reverse_mapping) {
+        finalize_mapping(mapping);
+    }
+    for (auto& mapping : reverse_mapping_macros) {
+        finalize_mapping(mapping);
+    }
+    for (auto& mapping : reverse_mapping_layers) {
+        finalize_mapping(mapping);
     }
     set_gpio_inout_masks(gpio_in_mask_, gpio_out_mask_);
     }

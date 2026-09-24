@@ -30,6 +30,9 @@ void print_contact_slots(const Tps43Sample& sample) {
 
 void Tps43TimingCapture::begin() {
     printf("TPS43 async runtime timing capture; M = 15-second normal-use capture (no forced reads)\n");
+    printf("7 = test %u ms; 8 = set RIGHT TPS43 active interval to %u ms; B = restore %u ms baseline\n",
+        kTps43SevenMsActiveReportIntervalMs, kTps43DefaultActiveReportIntervalMs,
+        kTps43BaselineActiveReportIntervalMs);
     printf("D = toggle 10 Hz dual-pad compact-sample debug (cached samples; no extra sensor reads)\n");
     printf("C = 40-second Phase 11 capture after a 1-second settling delay\n");
     printf("STAGE: one-finger compact report samples=%zu\n", kCompactSamples);
@@ -254,6 +257,16 @@ void Tps43TimingCapture::poll_serial() {
                 manual_debug_enabled_ ? "on" : "off");
         } else if ((character == 'm' || character == 'M') && !armed_ && !phase11_capture_busy()) {
             tps43_normal_capture_start(time_us_64());
+        } else if ((character == '7' || character == '8' || character == 'b' || character == 'B') &&
+                   !armed_ && !tps43_normal_capture_busy() && !phase11_capture_busy() &&
+                   !active_report_interval_request_pending_) {
+            requested_active_report_interval_ms_ = character == '7'
+                                                       ? kTps43SevenMsActiveReportIntervalMs
+                                                   : character == '8' ? kTps43DefaultActiveReportIntervalMs
+                                                                      : kTps43BaselineActiveReportIntervalMs;
+            active_report_interval_request_pending_ = true;
+            printf("TPS43 active_report_interval_request_ms=%u pad=right persistence=volatile\n",
+                requested_active_report_interval_ms_);
         } else if (character == '\r' || character == '\n') {
             enter_received = true;
         }
@@ -265,6 +278,15 @@ void Tps43TimingCapture::poll_serial() {
         stage_mismatches_ = 0;
         printf("capture_armed=yes; collecting %zu complete reports automatically\n", kCompactSamples);
     }
+}
+
+bool Tps43TimingCapture::take_active_report_interval_request(uint16_t& interval_ms) {
+    if (!active_report_interval_request_pending_) {
+        return false;
+    }
+    interval_ms = requested_active_report_interval_ms_;
+    active_report_interval_request_pending_ = false;
+    return true;
 }
 
 bool Tps43TimingCapture::read_requested() const {

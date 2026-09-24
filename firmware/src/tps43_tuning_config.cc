@@ -113,6 +113,8 @@ DualTps43Tuning production_tuning() {
     tuning.scroll_gain = { 4, 4, 4000, 256, 15000 };
     tuning.scroll_momentum = { 0, 0, 0, 0 };
     tuning.left_assisted_drag_axis_threshold = 2;
+    tuning.subthreshold_cursor_expiry_us = 50000;
+    tuning.subthreshold_cursor_threshold = 2;
     return tuning;
 }
 
@@ -128,6 +130,8 @@ bool validate_tps43_tuning(const DualTps43Tuning& tuning) {
     return tuning.tap_max_duration_us > 0 && tuning.stationary_intent_threshold_us > 0 &&
            tuning.stationary_intent_threshold_us < tuning.tap_max_duration_us &&
            tuning.neutral_activation_threshold >= 0 && tuning.left_assisted_drag_axis_threshold > 0 &&
+           tuning.subthreshold_cursor_expiry_us >= 1000 && tuning.subthreshold_cursor_expiry_us <= 65535000 &&
+           tuning.subthreshold_cursor_threshold >= 1 && tuning.subthreshold_cursor_threshold <= 255 &&
            validate_velocity_gain(tuning.cursor_gain) && validate_velocity_gain(tuning.scroll_gain) &&
            validate_momentum(tuning.scroll_momentum);
 }
@@ -161,13 +165,27 @@ bool encode_tps43_tuning(const DualTps43Tuning& tuning, uint8_t* buffer, std::si
     cursor += 4;
     write_i32(cursor, tuning.left_assisted_drag_axis_threshold);
     cursor += 4;
+    write_u32(cursor, tuning.subthreshold_cursor_expiry_us);
+    cursor += 4;
+    *cursor++ = tuning.subthreshold_cursor_threshold;
     return static_cast<std::size_t>(cursor - buffer) == kTps43TuningBlockSize;
 }
 
 bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps43Tuning* tuning) {
-    if (buffer == nullptr || tuning == nullptr || buffer_size < kTps43TuningBlockSize ||
-        read_u32(buffer) != kTps43TuningBlockMagic || buffer[4] != kTps43TuningBlockVersion ||
-        read_u16(buffer + 6) != kTps43TuningBlockSize) {
+    if (buffer == nullptr || tuning == nullptr || buffer_size < kTps43TuningBlockV1Size ||
+        read_u32(buffer) != kTps43TuningBlockMagic) {
+        return false;
+    }
+
+    const uint8_t block_version = buffer[4];
+    const uint16_t block_size = read_u16(buffer + 6);
+    const bool legacy_v1 = block_version == 1 && block_size == kTps43TuningBlockV1Size &&
+                           buffer_size >= kTps43TuningBlockV1Size;
+    const bool legacy_v2 = block_version == 2 && block_size == kTps43TuningBlockV2Size &&
+                           buffer_size >= kTps43TuningBlockV2Size;
+    const bool current_v3 = block_version == kTps43TuningBlockVersion && block_size == kTps43TuningBlockSize &&
+                            buffer_size >= kTps43TuningBlockSize;
+    if (!legacy_v1 && !legacy_v2 && !current_v3) {
         return false;
     }
 
@@ -190,12 +208,26 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
     decoded.scroll_momentum.stop_velocity_logical_units_per_second = read_u32(cursor);
     cursor += 4;
     decoded.left_assisted_drag_axis_threshold = read_i32(cursor);
+    cursor += 4;
+    if (legacy_v2 || current_v3) {
+        decoded.subthreshold_cursor_expiry_us = read_u32(cursor);
+        cursor += 4;
+    }
+    if (current_v3) {
+        decoded.subthreshold_cursor_threshold = *cursor;
+    }
 
     if (!validate_tps43_tuning(decoded)) {
         return false;
     }
     *tuning = decoded;
     return true;
+}
+
+void migrate_tps43_tuning_v21(DualTps43Tuning* tuning) {
+    if (tuning != nullptr) {
+        tuning->subthreshold_cursor_threshold = production_tuning().subthreshold_cursor_threshold;
+    }
 }
 
 bool get_configured_tps43_runtime_tuning(tps43_runtime_tuning_t* controls) {
@@ -210,10 +242,12 @@ bool get_configured_tps43_runtime_tuning(tps43_runtime_tuning_t* controls) {
     controls->left_assisted_drag_axis_threshold = tuning.left_assisted_drag_axis_threshold;
     controls->cursor_base_scale_q8 = tuning.cursor_gain.minimum_gain_q8;
     controls->scroll_base_scale_q8 = tuning.scroll_gain.minimum_gain_q8;
+    controls->subthreshold_cursor_expiry_ms = static_cast<uint16_t>(tuning.subthreshold_cursor_expiry_us / 1000);
+    controls->subthreshold_cursor_threshold = tuning.subthreshold_cursor_threshold;
     return true;
 }
 
-bool set_configured_tps43_runtime_tuning(const tps43_runtime_tuning_t& controls) {
+bool set_configured_tps43_runtime_tuning(const tps43_runtime_tuning_set_t& controls) {
     DualTps43Tuning candidate = configured_tps43_tuning();
     candidate.tap_max_duration_us = static_cast<uint64_t>(controls.tap_max_duration_ms) * 1000;
     candidate.stationary_intent_threshold_us = static_cast<uint64_t>(controls.stationary_intent_threshold_ms) * 1000;
@@ -223,6 +257,18 @@ bool set_configured_tps43_runtime_tuning(const tps43_runtime_tuning_t& controls)
     candidate.cursor_gain.maximum_gain_q8 = controls.cursor_base_scale_q8;
     candidate.scroll_gain.minimum_gain_q8 = controls.scroll_base_scale_q8;
     candidate.scroll_gain.maximum_gain_q8 = controls.scroll_base_scale_q8;
+    candidate.subthreshold_cursor_expiry_us = static_cast<uint32_t>(controls.subthreshold_cursor_expiry_ms) * 1000;
+    if (!validate_tps43_tuning(candidate)) {
+        return false;
+    }
+
+    set_configured_tps43_tuning(candidate);
+    return true;
+}
+
+bool set_configured_tps43_cursor_threshold(uint8_t threshold) {
+    DualTps43Tuning candidate = configured_tps43_tuning();
+    candidate.subthreshold_cursor_threshold = threshold;
     if (!validate_tps43_tuning(candidate)) {
         return false;
     }

@@ -7,6 +7,10 @@
 
 #include "tps43_driver.h"
 
+constexpr uint16_t kTps43SevenMsActiveReportIntervalMs = 7;
+constexpr uint16_t kTps43DefaultActiveReportIntervalMs = 8;
+constexpr uint16_t kTps43BaselineActiveReportIntervalMs = 13;
+
 struct Tps43Iqs5xxConfig {
     i2c_inst_t* bus;
     uint8_t address;
@@ -25,6 +29,7 @@ struct Tps43ServiceTiming {
     uint32_t transfer_timeouts = 0;
     uint32_t max_poll_us = 0;
     uint32_t last_acquisition_us = 0;
+    uint16_t active_report_interval_ms = 0;
     bool last_sample_had_contact_read = false;
     bool last_sample_published = false;
 };
@@ -51,6 +56,10 @@ class Tps43Iqs5xxDriver final : public Tps43Driver {
     // are read in the same communication window, without changing gesture policy.
     void request_forced_read(bool diagnose_contact_mismatch = false);
 
+    // Requests a volatile report-interval change for the diagnostic profile.
+    // Only the 8 ms test interval and the 13 ms baseline are accepted.
+    bool request_active_report_interval(uint16_t interval_ms);
+
     // Returns the latest complete acquisition without changing it.
     Tps43Sample sample() const override;
 
@@ -62,6 +71,8 @@ class Tps43Iqs5xxDriver final : public Tps43Driver {
         Compact,
         Contact,
         Close,
+        RateWrite,
+        RateClose,
         Wake,
         Reset,
         RecoverClose };
@@ -70,6 +81,7 @@ class Tps43Iqs5xxDriver final : public Tps43Driver {
         Failed };
 
     void start_transfer(uint16_t address, uint8_t length, Stage stage);
+    void start_write_transfer(uint16_t address, const uint8_t* data, uint8_t length, Stage stage);
     TransferResult poll_transfer();
     void fail_acquisition(bool timeout);
     void reset_controller();
@@ -88,11 +100,16 @@ class Tps43Iqs5xxDriver final : public Tps43Driver {
     bool forced_active_ = false;
     bool wake_retried_ = false;
     bool recovery_close_attempted_ = false;
+    bool active_rate_request_pending_ = false;
+    uint16_t active_rate_request_ms_ = 0;
+    uint16_t active_rate_in_progress_ms_ = 0;
     Stage stage_ = Stage::Idle;
     Tps43Sample next_sample_;
     uint8_t data_[35] = {};
     uint16_t register_address_ = 0;
     uint8_t read_length_ = 0;
+    uint8_t write_data_[2] = {};
+    uint8_t write_length_ = 0;
     uint8_t commands_sent_ = 0;
     uint8_t bytes_received_ = 0;
     uint64_t acquisition_started_us_ = 0;

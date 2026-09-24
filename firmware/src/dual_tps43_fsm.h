@@ -94,6 +94,11 @@ struct DualTps43Tuning {
     // Minimum absolute dx or dy in one Right report that qualifies
     // Left-assisted Drag. This threshold is per-report, not accumulated.
     int32_t left_assisted_drag_axis_threshold = 2;
+    // Unclassified one-count cursor deltas accumulate for this long before
+    // being discarded. Unit: microseconds.
+    uint32_t subthreshold_cursor_expiry_us = 50000;
+    // Per-axis accumulated magnitude required to emit unclassified cursor input.
+    uint8_t subthreshold_cursor_threshold = 2;
 };
 
 // Interface between normalized dual-pad input and logical actions.
@@ -238,6 +243,9 @@ class DualTps43Fsm : public DualPadProcessor {
     bool right_latched_saw_inactive_ = false;
     uint32_t right_latched_drop_session_id_ = 0;
     VelocityGainState cursor_motion_;
+    int64_t pending_cursor_x_ = 0;
+    int64_t pending_cursor_y_ = 0;
+    uint64_t pending_cursor_since_us_ = 0;
     ScrollMotionState scroll_motion_;
     ScrollSource scroll_source_this_cycle_ = ScrollSource::None;
 };

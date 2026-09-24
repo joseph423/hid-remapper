@@ -21,6 +21,20 @@ int getchar_timeout_us(uint32_t timeout_us) {
 // Verifies M/Enter isolation, bounded serial consumption and repeatable captures.
 int main() {
     Tps43TimingCapture capture;
+    uint16_t requested_interval_ms = 0;
+    input = { '8' };
+    capture.poll_serial();
+    assert(capture.take_active_report_interval_request(requested_interval_ms));
+    assert(requested_interval_ms == 8);
+    input = { '7' };
+    capture.poll_serial();
+    assert(capture.take_active_report_interval_request(requested_interval_ms));
+    assert(requested_interval_ms == 7);
+    input = { 'B' };
+    capture.poll_serial();
+    assert(capture.take_active_report_interval_request(requested_interval_ms));
+    assert(requested_interval_ms == 13);
+    assert(!capture.take_active_report_interval_request(requested_interval_ms));
     input = { 'D' };
     capture.poll_serial();
     assert(capture.manual_debug_enabled());

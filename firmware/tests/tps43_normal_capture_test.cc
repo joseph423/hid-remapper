@@ -31,6 +31,7 @@ void test_capture(FILE* output) {
     sample.finger_count = 1;
     sample.movement_reported = true;
     sample.relative_x = -1;
+    sample.previous_cycle_time_ms = 13;
     tps43_normal_capture_note_sample(sample.timestamp_us, sample, false, 5, 2, 3, 0);
     tps43_normal_capture_start(100);
     fflush(stdout);
@@ -56,6 +57,8 @@ void test_capture(FILE* output) {
     tps43_normal_capture_note_scroll_action(1000600, 4, -8);
     tps43_normal_capture_note_scroll_usb(1000700, true, 1, -2);
     sample.timestamp_us += 1000;
+    sample.previous_cycle_time_ms = 8;
+    sample.report_rate_missed = true;
     tps43_normal_capture_note_sample(sample.timestamp_us, sample, true, 5, 2, 3, 500);
     tps43_normal_capture_note_usb(1001200, true, -1, 0);
     // The capture includes failures even if the driver publishes no sample.
@@ -68,6 +71,8 @@ void test_capture(FILE* output) {
     assert(text.find("samples=2 usb_attempts=3 usb_failed=1 digitizer_transfer_complete=2 digitizer_transfer_failed=1 failures=1 timeouts=1") != std::string::npos);
     assert(text.find("normal_samples intervals=1 mean_us=1000 max_us=1000") != std::string::npos);
     assert(text.find("normal_usb_submitted intervals=1 mean_us=1000 max_us=1000") != std::string::npos);
+    assert(text.find("normal_hid_cursor motion_reports=2 max_delta=1 delta_1_2to3_4to7_8to15_16plus=2,0,0,0,0") != std::string::npos);
+    assert(text.find("normal_sensor_rate samples=2 mean_cycle_ms=10 min_cycle_ms=8 max_cycle_ms=13 rr_missed=1") != std::string::npos);
     assert(text.find("normal_scroll raw_samples=0 raw_dx=0 raw_dy=0 action_samples=1 action_q8_dx=4 action_q8_dy=-8 usb_attempts=1 usb_successes=1 usb_wheel=1 usb_pan=-2") != std::string::npos);
     assert(text.find("normal_sample t_us=0 dx=-1 dy=0 count=1 flags=1") != std::string::npos);
     assert(text.find("normal_usb t_us=400 dx=-1 dy=0 count=0 flags=0") != std::string::npos);
@@ -86,6 +91,7 @@ void test_ring_and_repeat(FILE* output) {
     finish_dump(36000000);
     const auto text = read_output(output);
     assert(text.find("samples=600 usb_attempts=0 usb_failed=0 digitizer_transfer_complete=0 digitizer_transfer_failed=0 failures=0 timeouts=0") != std::string::npos);
+    assert(text.find("normal_counts fingers_0_1_2_3_4_5_invalid=0,600,0,0,0,0,0 delta_0_1_2to3_4to7_8to15_16plus=0,0,0,0,0,0") != std::string::npos);
     assert(text.find("sample_overwritten=88 usb_overwritten=0") != std::string::npos);
     assert(text.find("normal_sample t_us=88000 dx=88") != std::string::npos);
     assert(text.find("normal_sample t_us=599000 dx=599") != std::string::npos);

@@ -113,6 +113,14 @@ struct NormalCapture {
     Trace sample_trace, usb_trace;
     uint32_t counts[7] = {};      // 0..5 fingers, invalid >5.
     uint32_t delta_bins[6] = {};  // max(abs(dx),abs(dy)): 0,1,2..3,4..7,8..15,16+.
+    uint32_t hid_motion_reports = 0;
+    uint32_t hid_delta_bins[5] = {};  // Successful nonzero mouse X/Y reports: 1, 2..3, 4..7, 8..15, 16+.
+    uint32_t hid_max_delta = 0;
+    uint32_t sensor_cycle_samples = 0;
+    uint32_t sensor_cycle_total_ms = 0;
+    uint32_t sensor_cycle_min_ms = UINT32_MAX;
+    uint32_t sensor_cycle_max_ms = 0;
+    uint32_t sensor_rate_missed = 0;
     uint32_t failed_usb = 0;
     // A 15-second full-speed interrupt endpoint can complete at most 15,000 reports.
     uint16_t digitizer_transfer_complete = 0;
@@ -217,8 +225,13 @@ void tps43_normal_capture_note_sample(uint64_t now_us, const Tps43Sample& sample
     }
     normal.max_acquisition = std::max(normal.max_acquisition, acquisition_us);
     add_interval(normal.samples, sample.timestamp_us);
+    ++normal.sensor_cycle_samples;
+    normal.sensor_cycle_total_ms += sample.previous_cycle_time_ms;
+    normal.sensor_cycle_min_ms = std::min<uint32_t>(normal.sensor_cycle_min_ms, sample.previous_cycle_time_ms);
+    normal.sensor_cycle_max_ms = std::max<uint32_t>(normal.sensor_cycle_max_ms, sample.previous_cycle_time_ms);
+    normal.sensor_rate_missed += sample.report_rate_missed;
     ++normal.counts[std::min<unsigned>(sample.finger_count, 6)];
-    if (sample.finger_count == 1) {
+    if (sample.finger_count == 1 && sample.movement_reported) {
         const auto magnitude = [](int32_t value) {
             return static_cast<uint64_t>(value < 0 ? -static_cast<int64_t>(value) : value);
         };
@@ -229,7 +242,7 @@ void tps43_normal_capture_note_sample(uint64_t now_us, const Tps43Sample& sample
                                           : delta < 16   ? 4
                                                          : 5;
         ++normal.delta_bins[bin];
-        if (sample.movement_reported && delta != 0) {
+        if (delta != 0) {
             add_interval(normal.movement, sample.timestamp_us);
         }
     }
@@ -251,6 +264,19 @@ void tps43_normal_capture_note_usb(uint64_t now_us, bool success, int32_t dx, in
     }
     if (success) {
         add_interval(normal.usb, now_us);
+        if (dx != 0 || dy != 0) {
+            const auto magnitude = [](int32_t value) {
+                return static_cast<uint64_t>(value < 0 ? -static_cast<int64_t>(value) : value);
+            };
+            const uint64_t delta = std::max(magnitude(dx), magnitude(dy));
+            const unsigned bin = delta == 1 ? 0 : delta < 4 ? 1
+                                              : delta < 8   ? 2
+                                              : delta < 16  ? 3
+                                                            : 4;
+            ++normal.hid_motion_reports;
+            ++normal.hid_delta_bins[bin];
+            normal.hid_max_delta = std::max(normal.hid_max_delta, static_cast<uint32_t>(delta));
+        }
     } else {
         ++normal.failed_usb;
     }
@@ -356,6 +382,19 @@ void tps43_normal_capture_poll(uint64_t now_us) {
             static_cast<unsigned long>(normal.delta_bins[1]), static_cast<unsigned long>(normal.delta_bins[2]),
             static_cast<unsigned long>(normal.delta_bins[3]), static_cast<unsigned long>(normal.delta_bins[4]),
             static_cast<unsigned long>(normal.delta_bins[5]));
+        printf("normal_hid_cursor motion_reports=%lu max_delta=%lu delta_1_2to3_4to7_8to15_16plus=%lu,%lu,%lu,%lu,%lu\n",
+            static_cast<unsigned long>(normal.hid_motion_reports), static_cast<unsigned long>(normal.hid_max_delta),
+            static_cast<unsigned long>(normal.hid_delta_bins[0]), static_cast<unsigned long>(normal.hid_delta_bins[1]),
+            static_cast<unsigned long>(normal.hid_delta_bins[2]), static_cast<unsigned long>(normal.hid_delta_bins[3]),
+            static_cast<unsigned long>(normal.hid_delta_bins[4]));
+        printf("normal_sensor_rate samples=%lu mean_cycle_ms=%lu min_cycle_ms=%lu max_cycle_ms=%lu rr_missed=%lu\n",
+            static_cast<unsigned long>(normal.sensor_cycle_samples),
+            static_cast<unsigned long>(normal.sensor_cycle_samples
+                                           ? normal.sensor_cycle_total_ms / normal.sensor_cycle_samples
+                                           : 0),
+            static_cast<unsigned long>(normal.sensor_cycle_samples ? normal.sensor_cycle_min_ms : 0),
+            static_cast<unsigned long>(normal.sensor_cycle_max_ms),
+            static_cast<unsigned long>(normal.sensor_rate_missed));
     } else if (row == 5) {
         printf("normal_trace retained_last_per_source=%lu sample_overwritten=%lu usb_overwritten=%lu; sample_flags=movement:1,tap:2,two_tap:4,scroll:8 usb_flags=submitted:1\n",
             static_cast<unsigned long>(kTraceCapacity),

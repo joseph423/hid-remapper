@@ -195,6 +195,35 @@
                 </div>
                 <div class="row mt-3">
                     <div class="col-4 text-end">
+                        <label for="tps43_cursor_subthreshold_expiry_input" class="col-form-label">Sub-threshold cursor expiry</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="1" max="65535" step="1" id="tps43_cursor_subthreshold_expiry_input" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">ms</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="offset-4 col-auto">
+                        <div class="form-text">How long unclassified tiny cursor deltas may accumulate before being discarded (1–65,535 ms).</div>
+                    </div>
+                </div>
+                <div class="row mt-3 align-items-center">
+                    <div class="col-4 text-end">
+                        <label for="tps43_cursor_subthreshold_threshold_input" class="col-form-label">Sub-threshold cursor threshold</label>
+                    </div>
+                    <div class="col-auto">
+                        <input type="number" min="1" max="255" step="1" id="tps43_cursor_subthreshold_threshold_input" class="form-control text-end" style="max-width: 100px;">
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="offset-4 col-auto">
+                        <div class="form-text">Unclassified dx/dy counts accumulate per axis until this value (1–255; default 2). Larger values can delay or suppress slow movement.</div>
+                    </div>
+                </div>
+                <div class="row mt-3">
+                    <div class="col-4 text-end">
                         <label for="gpio_debounce_time_input" class="col-form-label">GPIO debounce time</label>
                     </div>
                     <div class="col-auto">
