@@ -138,7 +138,7 @@
                     </div>
                 </div>
                 <h5 class="mt-4">TPS43 touchpad tuning</h5>
-                <p class="text-muted">Changes apply immediately to the TPS43 gesture engine and are saved with the configuration. Base scales use Q8 units: 256 = 1.0x.</p>
+                <p class="text-muted">Changes apply to the TPS43 gesture engine or sensor settings and are saved with the configuration. Base scales use Q8 units: 256 = 1.0x.</p>
                 <div class="row mt-3">
                     <div class="col-4 text-end">
                         <label for="tps43_tap_max_duration_input" class="col-form-label">Tap duration</label>
@@ -191,6 +191,35 @@
                     </div>
                     <div class="col-auto">
                         <input type="number" min="0" id="tps43_scroll_base_scale_input" class="form-control text-end" style="max-width: 100px;">
+                    </div>
+                </div>
+                <h6 class="mt-4">IQS572 power-mode timeouts</h6>
+                <p class="text-muted">These control each pad's automatic Idle → LP1 → LP2 schedule. The LP1 delay is measured from entering Idle; the LP2 delay is measured from entering LP1. Longer delays may increase sensor power use.</p>
+                <div class="row mt-3">
+                    <div class="col-4 text-end">
+                        <label for="tps43_idle_timeout_before_lp1_input" class="col-form-label">Idle → LP1 timeout</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="1" max="254" step="1" id="tps43_idle_timeout_before_lp1_input" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">s</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3">
+                    <div class="col-4 text-end">
+                        <label for="tps43_lp1_timeout_before_lp2_input" class="col-form-label">LP1 → LP2 timeout</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="20" max="5080" step="20" id="tps43_lp1_timeout_before_lp2_input" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">s</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="offset-4 col-auto">
+                        <div class="form-text">The LP1 timeout accepts 20-second increments (the sensor register's resolution). Example: 120 s + 180 s reaches LP2 5 minutes after entering Idle.</div>
                     </div>
                 </div>
                 <div class="row mt-3 align-items-center">

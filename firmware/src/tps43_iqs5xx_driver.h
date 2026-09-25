@@ -59,6 +59,11 @@ class Tps43Iqs5xxDriver final : public Tps43Driver {
     // Only the 8 ms default and the 13 ms diagnostic baseline are accepted.
     bool request_active_report_interval(uint16_t interval_ms);
 
+    // Queues power-mode timeout registers for application and readback.
+    // The sensor registers are volatile; callers persist the requested values
+    // in the adapter configuration and reapply them after startup.
+    bool request_power_mode_timeouts(uint8_t idle_timeout_seconds, uint8_t lp1_timeout_20s_units);
+
     // Returns the latest complete acquisition without changing it.
     Tps43Sample sample() const override;
 
@@ -67,6 +72,10 @@ class Tps43Iqs5xxDriver final : public Tps43Driver {
 
    private:
     enum class Stage { Idle,
+        IdleTimeoutWrite,
+        Lp1TimeoutWrite,
+        Lp1TimeoutRead,
+        PowerTimeoutReadClose,
         Compact,
         Contact,
         Close,
@@ -102,6 +111,10 @@ class Tps43Iqs5xxDriver final : public Tps43Driver {
     bool active_rate_request_pending_ = false;
     uint16_t active_rate_request_ms_ = 0;
     uint16_t active_rate_in_progress_ms_ = 0;
+    bool low_power_timeout_configuration_pending_ = false;
+    uint64_t low_power_timeout_apply_after_us_ = 0;
+    uint8_t idle_timeout_requested_seconds_ = 10;
+    uint8_t lp1_timeout_requested_20s_units_ = 1;
     Stage stage_ = Stage::Idle;
     Tps43Sample next_sample_;
     uint8_t data_[35] = {};

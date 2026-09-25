@@ -11,14 +11,15 @@
 #include "remapper.h"
 #include "tps43_tuning_config.h"
 
-const uint8_t CONFIG_VERSION = 25;
+const uint8_t CONFIG_VERSION = 26;
 static_assert(sizeof(persist_config_v19_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockV1Size);
 static_assert(sizeof(persist_config_v20_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockV2Size);
 static_assert(sizeof(persist_config_v21_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockV3Size);
 static_assert(sizeof(persist_config_v22_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockV3Size);
 static_assert(sizeof(persist_config_v23_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockV4Size);
 static_assert(sizeof(persist_config_v24_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockV5Size);
-static_assert(sizeof(persist_config_v25_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockSize);
+static_assert(sizeof(persist_config_v25_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockV6Size);
+static_assert(sizeof(persist_config_v26_t) == sizeof(persist_config_v18_t) + kTps43TuningBlockSize);
 
 const uint8_t CONFIG_FLAG_UNMAPPED_PASSTHROUGH = 0x01;
 const uint8_t CONFIG_FLAG_UNMAPPED_PASSTHROUGH_MASK = 0b00001111;
@@ -709,6 +710,17 @@ void load_config_v25(const uint8_t* persisted_config) {
     load_config_v18_or_v19(persisted_config, &config->base, sizeof(persist_config_v25_t));
 }
 
+void load_config_v26(const uint8_t* persisted_config) {
+    const persist_config_v26_t* config = (const persist_config_v26_t*) persisted_config;
+    DualTps43Tuning tuning;
+    if (!decode_tps43_tuning(config->tps43_tuning, sizeof(config->tps43_tuning), &tuning)) {
+        printf("invalid TPS43 tuning block; using production defaults\n");
+        tuning = production_tuning();
+    }
+    set_configured_tps43_tuning(tuning);
+    load_config_v18_or_v19(persisted_config, &config->base, sizeof(persist_config_v26_t));
+}
+
 void load_config(const uint8_t* persisted_config) {
     if (!checksum_ok(persisted_config, PERSISTED_CONFIG_SIZE) || !persisted_version_ok(persisted_config)) {
         return;
@@ -796,8 +808,10 @@ void load_config(const uint8_t* persisted_config) {
         load_config_v23(persisted_config);
     } else if (version == 24) {
         load_config_v24(persisted_config);
-    } else {
+    } else if (version == 25) {
         load_config_v25(persisted_config);
+    } else {
+        load_config_v26(persisted_config);
     }
 }
 
@@ -975,6 +989,13 @@ uint16_t handle_get_report1(uint8_t report_id, uint8_t* buffer, uint16_t reqlen)
             case ConfigCommand::GET_TPS43_SCROLL_GAIN: {
                 if (!get_configured_tps43_scroll_gain(
                         (tps43_scroll_gain_tuning_t*) config_buffer->data)) {
+                    return 0;
+                }
+                break;
+            }
+            case ConfigCommand::GET_TPS43_POWER_MODE_TIMEOUTS: {
+                if (!get_configured_tps43_power_mode_timeouts(
+                        (tps43_power_mode_timeouts_t*) config_buffer->data)) {
                     return 0;
                 }
                 break;
@@ -1164,9 +1185,20 @@ void handle_set_report1(uint8_t report_id, uint8_t const* buffer, uint16_t bufsi
                     }
                     break;
                 }
+                case ConfigCommand::SET_TPS43_POWER_MODE_TIMEOUTS: {
+                    const tps43_power_mode_timeouts_t* timeouts =
+                        (const tps43_power_mode_timeouts_t*) config_buffer->data;
+                    if (set_configured_tps43_power_mode_timeouts(*timeouts)) {
+                        tps43_power_mode_timeouts_updated = true;
+                    } else {
+                        printf("invalid TPS43 power-mode timeouts; retaining previous settings\n");
+                    }
+                    break;
+                }
                 case ConfigCommand::GET_TPS43_TUNING:
                 case ConfigCommand::GET_TPS43_CURSOR_FILTER:
                 case ConfigCommand::GET_TPS43_SCROLL_GAIN:
+                case ConfigCommand::GET_TPS43_POWER_MODE_TIMEOUTS:
                 case ConfigCommand::GET_CONFIG:
                     break;
                 case ConfigCommand::CLEAR_MAPPING:

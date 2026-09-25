@@ -68,6 +68,18 @@ void apply_configured_tps43_tuning() {
     tps43_coordinator.reset();
 }
 
+void apply_configured_tps43_power_mode_timeouts() {
+    const DualTps43Tuning tuning = configured_tps43_tuning();
+    if (!right_tps43_driver.request_power_mode_timeouts(
+            tuning.idle_timeout_before_lp1_seconds, tuning.lp1_timeout_before_lp2_20s_units)) {
+        printf("TPS43 Right-pad power-mode timeout request failed\n");
+    }
+    if (!left_tps43_driver.request_power_mode_timeouts(
+            tuning.idle_timeout_before_lp1_seconds, tuning.lp1_timeout_before_lp2_20s_units)) {
+        printf("TPS43 Left-pad power-mode timeout request failed\n");
+    }
+}
+
 struct Tps43PadRuntimeStats {
     uint32_t published_samples = 0;
     uint32_t movement_samples = 0;
@@ -302,11 +314,23 @@ int main() {
         printf("TPS43 Right-pad runtime initialization failed\n");
     } else if (!right_tps43_driver.request_active_report_interval(kTps43DefaultActiveReportIntervalMs)) {
         printf("TPS43 Right-pad default report interval request failed\n");
+    } else {
+        const DualTps43Tuning tuning = configured_tps43_tuning();
+        if (!right_tps43_driver.request_power_mode_timeouts(
+                tuning.idle_timeout_before_lp1_seconds, tuning.lp1_timeout_before_lp2_20s_units)) {
+            printf("TPS43 Right-pad power-mode timeout request failed\n");
+        }
     }
     if (!left_tps43_driver.initialize()) {
         printf("TPS43 Left-pad runtime initialization failed\n");
     } else if (!left_tps43_driver.request_active_report_interval(kTps43DefaultActiveReportIntervalMs)) {
         printf("TPS43 Left-pad default report interval request failed\n");
+    } else {
+        const DualTps43Tuning tuning = configured_tps43_tuning();
+        if (!left_tps43_driver.request_power_mode_timeouts(
+                tuning.idle_timeout_before_lp1_seconds, tuning.lp1_timeout_before_lp2_20s_units)) {
+            printf("TPS43 Left-pad power-mode timeout request failed\n");
+        }
     }
 
     tps43_timing_capture.begin();
@@ -397,6 +421,10 @@ int main() {
         if (tps43_tuning_updated) {
             tps43_tuning_updated = false;
             apply_configured_tps43_tuning();
+        }
+        if (tps43_power_mode_timeouts_updated) {
+            tps43_power_mode_timeouts_updated = false;
+            apply_configured_tps43_power_mode_timeouts();
         }
         if (set_gpio_dir_pending && !suspended) {
             set_gpio_dir();

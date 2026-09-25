@@ -30,6 +30,7 @@ extern volatile bool suspended;
 extern volatile bool resume_pending;
 extern volatile bool config_updated;
 extern volatile bool tps43_tuning_updated;
+extern volatile bool tps43_power_mode_timeouts_updated;
 
 extern uint8_t unmapped_passthrough_layer_mask;
 extern uint32_t partial_scroll_timeout;

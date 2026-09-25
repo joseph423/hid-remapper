@@ -105,6 +105,10 @@ struct DualTps43Tuning {
     uint8_t cursor_filter_slow_weight_percent = 20;
     uint8_t cursor_filter_normal_weight_percent = 10;
     uint8_t cursor_filter_fast_weight_percent = 0;
+    // Sensor register timeouts, separate from gesture processing. Idle timeout
+    // is seconds; LP1 timeout is stored in the sensor's 20-second units.
+    uint8_t idle_timeout_before_lp1_seconds = 10;
+    uint8_t lp1_timeout_before_lp2_20s_units = 1;
 };
 
 // Interface between normalized dual-pad input and logical actions.

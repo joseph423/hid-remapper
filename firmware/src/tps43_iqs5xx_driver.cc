@@ -12,6 +12,11 @@ constexpr uint16_t kCompactReportRegister = 0x000C;
 constexpr uint16_t kContactReportRegister = 0x0016;
 constexpr uint16_t kEndCommunicationRegister = 0xEEEE;
 constexpr uint16_t kActiveReportIntervalRegister = 0x057A;
+constexpr uint16_t kIdleTimeoutRegister = 0x0586;
+constexpr uint16_t kLp1TimeoutRegister = 0x0587;
+// Delay configuration until after the sensor's startup debounce interval.
+constexpr uint64_t kPowerTimeoutApplyStartupDelayUs = 600000;
+constexpr uint64_t kPowerTimeoutApplyDeadlineUs = 250000;
 // A fault deadline, not a report-rate/tuning target. Historical forced reads
 // reached 13 ms. All waits below yield to USB; one acquisition gets 20 ms total.
 constexpr uint64_t kAcquisitionDeadlineUs = 20000;
@@ -56,6 +61,19 @@ bool Tps43Iqs5xxDriver::initialize() {
     return true;
 }
 
+bool Tps43Iqs5xxDriver::request_power_mode_timeouts(
+    uint8_t idle_timeout_seconds, uint8_t lp1_timeout_20s_units) {
+    if (!initialized_ || idle_timeout_seconds == 0 || idle_timeout_seconds == 255 ||
+        lp1_timeout_20s_units == 0 || lp1_timeout_20s_units == 255) {
+        return false;
+    }
+    idle_timeout_requested_seconds_ = idle_timeout_seconds;
+    lp1_timeout_requested_20s_units_ = lp1_timeout_20s_units;
+    low_power_timeout_configuration_pending_ = true;
+    low_power_timeout_apply_after_us_ = time_us_64() + kPowerTimeoutApplyStartupDelayUs;
+    return true;
+}
+
 bool Tps43Iqs5xxDriver::service(uint64_t now_us) {
     (void) now_us;
     const uint32_t started_us = time_us_32();
@@ -77,7 +95,17 @@ void Tps43Iqs5xxDriver::poll() {
             return;
         }
         const uint64_t now = time_us_64();
-        if (stage_ == Stage::Idle && !sample_ready_ && now >= retry_after_us_ &&
+        if (stage_ == Stage::Idle && low_power_timeout_configuration_pending_ &&
+            now >= low_power_timeout_apply_after_us_) {
+            forced_active_ = true;
+            wake_retried_ = false;
+            deadline_us_ = now + kPowerTimeoutApplyDeadlineUs;
+            start_transfer(kCompactReportRegister, 10, Stage::Compact);
+            return;
+        }
+        if (stage_ == Stage::Idle && !sample_ready_
+            && !low_power_timeout_configuration_pending_
+            && now >= retry_after_us_ &&
             (active_rate_request_pending_ ? gpio_get(config_.rdy_pin)
                                           : (forced_read_requested_ || gpio_get(config_.rdy_pin)))) {
             if (active_rate_request_pending_) {
@@ -140,9 +168,16 @@ void Tps43Iqs5xxDriver::poll() {
         if (result == TransferResult::Failed) {
             // Only the documented forced-wake address NACK gets one retry.
             // The deadline is shared with the first attempt, not restarted.
-            const bool wake_nack = config_.bus->hw->tx_abrt_source ==
-                                   I2C_IC_TX_ABRT_SOURCE_ABRT_7B_ADDR_NOACK_BITS;
+            // TX_FLUSH_CNT can add upper bits to this register; match the
+            // address-NACK cause bit instead of comparing the whole value.
+            const bool wake_nack = (config_.bus->hw->tx_abrt_source &
+                                    I2C_IC_TX_ABRT_SOURCE_ABRT_7B_ADDR_NOACK_BITS) != 0;
             if (stage_ == Stage::Compact && forced_active_ && !wake_retried_ && wake_nack) {
+                if (low_power_timeout_configuration_pending_) {
+                    printf("TPS43 pad=%s power_timeout_retry_scheduled_after_nack=150us tx_abrt=0x%08lx\n",
+                        config_.bus == i2c0 ? "right" : "left",
+                        static_cast<unsigned long>(config_.bus->hw->tx_abrt_source));
+                }
                 (void) static_cast<uint32_t>(config_.bus->hw->clr_tx_abrt);
                 (void) static_cast<uint32_t>(config_.bus->hw->clr_stop_det);
                 wake_retried_ = true;
@@ -155,9 +190,41 @@ void Tps43Iqs5xxDriver::poll() {
         }
         const uint32_t elapsed = static_cast<uint32_t>(now - transaction_started_us_);
         switch (stage_) {
+            case Stage::IdleTimeoutWrite:
+            {
+                const uint8_t timeout = lp1_timeout_requested_20s_units_;
+                start_write_transfer(kLp1TimeoutRegister, &timeout, 1, Stage::Lp1TimeoutWrite);
+                break;
+            }
+            case Stage::Lp1TimeoutRead:
+                start_transfer(kEndCommunicationRegister, 0, Stage::PowerTimeoutReadClose);
+                break;
+            case Stage::PowerTimeoutReadClose:
+                // The end-window write does not touch the existing RX buffer.
+                printf(
+                    "TPS43 pad=%s idle_timeout_register=0x%04x requested_s=%u readback_s=%u "
+                    "lp1_timeout_register=0x%04x requested_20s_units=%u readback_20s_units=%u "
+                    "sensor_persistence=volatile result=%s\n",
+                    config_.bus == i2c0 ? "right" : "left", kIdleTimeoutRegister,
+                    idle_timeout_requested_seconds_, data_[0], kLp1TimeoutRegister,
+                    lp1_timeout_requested_20s_units_, data_[1],
+                    data_[0] == idle_timeout_requested_seconds_ && data_[1] == lp1_timeout_requested_20s_units_
+                        ? "verified" : "mismatch");
+                low_power_timeout_configuration_pending_ = false;
+                forced_active_ = false;
+                stage_ = Stage::Idle;
+                break;
+            case Stage::Lp1TimeoutWrite:
+                start_transfer(kIdleTimeoutRegister, 2, Stage::Lp1TimeoutRead);
+                break;
             case Stage::Compact:
                 timing_.last_compact_read_us = elapsed;
                 decode_compact();
+                if (low_power_timeout_configuration_pending_) {
+                    const uint8_t timeout = idle_timeout_requested_seconds_;
+                    start_write_transfer(kIdleTimeoutRegister, &timeout, 1, Stage::IdleTimeoutWrite);
+                    break;
+                }
                 if (next_sample_.finger_count == 3 || diagnostic_active_) {
                     start_transfer(kContactReportRegister, 35, Stage::Contact);
                 } else {
@@ -311,6 +378,24 @@ void Tps43Iqs5xxDriver::fail_acquisition(bool timeout) {
     ++timing_.transfer_failures;
     timing_.transfer_timeouts += timeout;
     const Stage failed_stage = stage_;
+    if (low_power_timeout_configuration_pending_) {
+        const char* phase = failed_stage == Stage::Compact || failed_stage == Stage::Wake ? "wake_read" :
+            (failed_stage == Stage::IdleTimeoutWrite ? "write_idle_timeout" :
+            (failed_stage == Stage::Lp1TimeoutWrite ? "write_lp1_timeout" :
+            (failed_stage == Stage::Lp1TimeoutRead ? "readback_timeouts" :
+            (failed_stage == Stage::PowerTimeoutReadClose ? "readback_close" :
+            (failed_stage == Stage::RecoverClose ? "recovery_close" : "recovery")))));
+        printf(
+            "TPS43 pad=%s power_timeouts idle_s=%u lp1_20s_units=%u result=failed failure=%s phase=%s stage=%u tx_abrt=0x%08lx intr=0x%08lx rdy=%u retried=%u sensor_persistence=volatile\n",
+            config_.bus == i2c0 ? "right" : "left", idle_timeout_requested_seconds_,
+            lp1_timeout_requested_20s_units_,
+            timeout ? "timeout" : "transfer", phase, static_cast<unsigned>(failed_stage),
+            static_cast<unsigned long>(config_.bus->hw->tx_abrt_source),
+            static_cast<unsigned long>(config_.bus->hw->raw_intr_stat), gpio_get(config_.rdy_pin),
+            wake_retried_);
+        low_power_timeout_configuration_pending_ = false;
+        forced_active_ = false;
+    }
     if (failed_stage == Stage::RateWrite || failed_stage == Stage::RateClose) {
         printf("TPS43 pad=%s active_report_interval_ms=%u result=%s failure=%s\n",
             config_.bus == i2c0 ? "right" : "left", active_rate_in_progress_ms_,

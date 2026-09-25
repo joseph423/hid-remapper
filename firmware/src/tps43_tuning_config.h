@@ -10,13 +10,15 @@
 // The block is serialized field-by-field in little-endian order. It must not
 // depend on C++ structure padding or compiler ABI details.
 constexpr uint32_t kTps43TuningBlockMagic = 0x54343354;
-constexpr uint8_t kTps43TuningBlockVersion = 6;
+constexpr uint8_t kPreviousTps43TuningBlockVersion = 6;
 constexpr std::size_t kTps43TuningBlockV1Size = 78;
 constexpr std::size_t kTps43TuningBlockV2Size = 82;
 constexpr std::size_t kTps43TuningBlockV3Size = 83;
 constexpr std::size_t kTps43TuningBlockV4Size = 85;
 constexpr std::size_t kTps43TuningBlockV5Size = 91;
-constexpr std::size_t kTps43TuningBlockSize = 100;
+constexpr std::size_t kTps43TuningBlockV6Size = 100;
+constexpr std::size_t kTps43TuningBlockSize = 102;
+constexpr uint8_t kTps43TuningBlockVersion = 7;
 
 // Returns the approved production defaults used by the current physical
 // profile. The returned value is independent of persisted configuration.
@@ -63,5 +65,10 @@ bool set_configured_tps43_cursor_filter(const tps43_cursor_filter_tuning_t& cont
 // Reads/writes the isolated active-scroll speed-gain A/B settings.
 bool get_configured_tps43_scroll_gain(tps43_scroll_gain_tuning_t* controls);
 bool set_configured_tps43_scroll_gain(const tps43_scroll_gain_tuning_t& controls);
+
+// Gets/sets the persistent IQS572 mode timeouts. LP1 uses 20-second units;
+// register value 255 is reserved for "never" and is not exposed by this API.
+bool get_configured_tps43_power_mode_timeouts(tps43_power_mode_timeouts_t* timeouts);
+bool set_configured_tps43_power_mode_timeouts(const tps43_power_mode_timeouts_t& timeouts);
 
 #endif

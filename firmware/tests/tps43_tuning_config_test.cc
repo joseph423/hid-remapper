@@ -35,6 +35,8 @@ void assert_equal(const DualTps43Tuning& expected, const DualTps43Tuning& actual
            actual.active_scroll_gain.fast_speed_limit_counts_per_second);
     assert(expected.active_scroll_gain.slow_gain_percent == actual.active_scroll_gain.slow_gain_percent);
     assert(expected.active_scroll_gain.fast_gain_percent == actual.active_scroll_gain.fast_gain_percent);
+    assert(expected.idle_timeout_before_lp1_seconds == actual.idle_timeout_before_lp1_seconds);
+    assert(expected.lp1_timeout_before_lp2_20s_units == actual.lp1_timeout_before_lp2_20s_units);
 }
 
 }  // namespace
@@ -54,6 +56,8 @@ int main() {
     assert(defaults.active_scroll_gain.fast_speed_limit_counts_per_second == 1000);
     assert(defaults.active_scroll_gain.slow_gain_percent == 200);
     assert(defaults.active_scroll_gain.fast_gain_percent == 50);
+    assert(defaults.idle_timeout_before_lp1_seconds == 10);
+    assert(defaults.lp1_timeout_before_lp2_20s_units == 1);
     assert_equal(defaults, configured_tps43_tuning());
 
     DualTps43Tuning configured = defaults;
@@ -79,6 +83,14 @@ int main() {
     assert(encode_tps43_tuning(scroll_gain_config, scroll_gain_block, sizeof(scroll_gain_block)));
     assert(decode_tps43_tuning(scroll_gain_block, sizeof(scroll_gain_block), &decoded));
     assert_equal(scroll_gain_config, decoded);
+
+    DualTps43Tuning custom_power_timeouts = defaults;
+    custom_power_timeouts.idle_timeout_before_lp1_seconds = 120;
+    custom_power_timeouts.lp1_timeout_before_lp2_20s_units = 9;
+    uint8_t custom_power_block[kTps43TuningBlockSize] = {};
+    assert(encode_tps43_tuning(custom_power_timeouts, custom_power_block, sizeof(custom_power_block)));
+    assert(decode_tps43_tuning(custom_power_block, sizeof(custom_power_block), &decoded));
+    assert_equal(custom_power_timeouts, decoded);
 
     // Older blocks stored min/max velocity gains in these slots. Retain the
     // first value as the fixed scale and ignore the retired fields.
@@ -157,6 +169,19 @@ int main() {
     assert(decode_tps43_tuning(legacy_v5, sizeof(legacy_v5), &decoded));
     assert(!decoded.active_scroll_gain.enabled);
     assert(decoded.active_scroll_gain.slow_gain_percent == 200);
+    assert(decoded.idle_timeout_before_lp1_seconds == defaults.idle_timeout_before_lp1_seconds);
+    assert(decoded.lp1_timeout_before_lp2_20s_units == defaults.lp1_timeout_before_lp2_20s_units);
+
+    uint8_t legacy_v6[kTps43TuningBlockV6Size] = {};
+    for (std::size_t i = 0; i < sizeof(legacy_v6); i++) {
+        legacy_v6[i] = buffer[i];
+    }
+    legacy_v6[4] = kPreviousTps43TuningBlockVersion;
+    legacy_v6[6] = static_cast<uint8_t>(kTps43TuningBlockV6Size);
+    legacy_v6[7] = static_cast<uint8_t>(kTps43TuningBlockV6Size >> 8);
+    assert(decode_tps43_tuning(legacy_v6, sizeof(legacy_v6), &decoded));
+    assert(decoded.idle_timeout_before_lp1_seconds == defaults.idle_timeout_before_lp1_seconds);
+    assert(decoded.lp1_timeout_before_lp2_20s_units == defaults.lp1_timeout_before_lp2_20s_units);
 
     uint8_t legacy_v2[kTps43TuningBlockV2Size] = {};
     for (std::size_t i = 0; i < sizeof(legacy_v2); i++) {
@@ -202,6 +227,17 @@ int main() {
     invalid = defaults;
     invalid.cursor_filter_slow_weight_percent = 101;
     assert(!validate_tps43_tuning(invalid));
+
+    tps43_power_mode_timeouts_t power_timeouts = {120, 9};
+    assert(set_configured_tps43_power_mode_timeouts(power_timeouts));
+    tps43_power_mode_timeouts_t loaded_power_timeouts = {};
+    assert(get_configured_tps43_power_mode_timeouts(&loaded_power_timeouts));
+    assert(loaded_power_timeouts.idle_timeout_seconds == 120);
+    assert(loaded_power_timeouts.lp1_timeout_20s_units == 9);
+    power_timeouts.lp1_timeout_20s_units = 0;
+    assert(!set_configured_tps43_power_mode_timeouts(power_timeouts));
+    power_timeouts = {255, 9};
+    assert(!set_configured_tps43_power_mode_timeouts(power_timeouts));
 
     tps43_runtime_tuning_set_t controls = {};
     tps43_runtime_tuning_t initial_controls = {};

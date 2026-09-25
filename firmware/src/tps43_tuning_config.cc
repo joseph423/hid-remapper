@@ -3,7 +3,6 @@
 namespace {
 
 constexpr uint16_t kHeaderSize = 8;
-
 void write_u16(uint8_t* buffer, uint16_t value) {
     buffer[0] = static_cast<uint8_t>(value);
     buffer[1] = static_cast<uint8_t>(value >> 8);
@@ -108,6 +107,8 @@ DualTps43Tuning production_tuning() {
     tuning.cursor_filter_slow_weight_percent = 20;
     tuning.cursor_filter_normal_weight_percent = 10;
     tuning.cursor_filter_fast_weight_percent = 0;
+    tuning.idle_timeout_before_lp1_seconds = 10;
+    tuning.lp1_timeout_before_lp2_20s_units = 1;
     return tuning;
 }
 
@@ -132,6 +133,10 @@ bool validate_tps43_tuning(const DualTps43Tuning& tuning) {
            tuning.cursor_filter_slow_weight_percent <= 100 &&
            tuning.cursor_filter_normal_weight_percent <= 100 &&
            tuning.cursor_filter_fast_weight_percent <= 100 &&
+           tuning.idle_timeout_before_lp1_seconds >= 1 &&
+           tuning.idle_timeout_before_lp1_seconds <= 254 &&
+           tuning.lp1_timeout_before_lp2_20s_units >= 1 &&
+           tuning.lp1_timeout_before_lp2_20s_units <= 254 &&
            tuning.active_scroll_gain.slow_speed_limit_counts_per_second > 0 &&
            tuning.active_scroll_gain.slow_speed_limit_counts_per_second <
                tuning.active_scroll_gain.fast_speed_limit_counts_per_second &&
@@ -191,6 +196,8 @@ bool encode_tps43_tuning(const DualTps43Tuning& tuning, uint8_t* buffer, std::si
     cursor += 2;
     write_u16(cursor, tuning.active_scroll_gain.fast_gain_percent);
     cursor += 2;
+    *cursor++ = tuning.idle_timeout_before_lp1_seconds;
+    *cursor++ = tuning.lp1_timeout_before_lp2_20s_units;
     return static_cast<std::size_t>(cursor - buffer) == kTps43TuningBlockSize;
 }
 
@@ -212,9 +219,11 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
                            buffer_size >= kTps43TuningBlockV4Size;
     const bool legacy_v5 = block_version == 5 && block_size == kTps43TuningBlockV5Size &&
                            buffer_size >= kTps43TuningBlockV5Size;
-    const bool current_v6 = block_version == kTps43TuningBlockVersion && block_size == kTps43TuningBlockSize &&
+    const bool legacy_v6 = block_version == kPreviousTps43TuningBlockVersion &&
+                           block_size == kTps43TuningBlockV6Size && buffer_size >= kTps43TuningBlockV6Size;
+    const bool current_v7 = block_version == kTps43TuningBlockVersion && block_size == kTps43TuningBlockSize &&
                             buffer_size >= kTps43TuningBlockSize;
-    if (!legacy_v1 && !legacy_v2 && !legacy_v3 && !legacy_v4 && !legacy_v5 && !current_v6) {
+    if (!legacy_v1 && !legacy_v2 && !legacy_v3 && !legacy_v4 && !legacy_v5 && !legacy_v6 && !current_v7) {
         return false;
     }
 
@@ -238,21 +247,21 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
     cursor += 4;
     decoded.left_assisted_drag_axis_threshold = read_i32(cursor);
     cursor += 4;
-    if (legacy_v2 || legacy_v3 || legacy_v4 || legacy_v5 || current_v6) {
+    if (legacy_v2 || legacy_v3 || legacy_v4 || legacy_v5 || legacy_v6 || current_v7) {
         decoded.subthreshold_cursor_expiry_us = read_u32(cursor);
         cursor += 4;
     }
-    if (legacy_v3 || legacy_v4 || legacy_v5 || current_v6) {
+    if (legacy_v3 || legacy_v4 || legacy_v5 || legacy_v6 || current_v7) {
         decoded.subthreshold_cursor_threshold = *cursor;
         cursor++;
     }
-    if (legacy_v4 || legacy_v5 || current_v6) {
+    if (legacy_v4 || legacy_v5 || legacy_v6 || current_v7) {
         if (*cursor > 1) {
             return false;
         }
         decoded.cursor_temporal_filter_enabled = *cursor++ != 0;
         decoded.cursor_filter_slow_weight_percent = *cursor++;
-        if (legacy_v5 || current_v6) {
+        if (legacy_v5 || legacy_v6 || current_v7) {
             decoded.cursor_filter_slow_speed_limit_counts_per_second = read_u16(cursor);
             cursor += 2;
             decoded.cursor_filter_fast_speed_limit_counts_per_second = read_u16(cursor);
@@ -268,7 +277,7 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
         }
     }
 
-    if (current_v6) {
+    if (legacy_v6 || current_v7) {
         if (*cursor > 1) {
             return false;
         }
@@ -280,6 +289,11 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
         decoded.active_scroll_gain.slow_gain_percent = read_u16(cursor);
         cursor += 2;
         decoded.active_scroll_gain.fast_gain_percent = read_u16(cursor);
+        cursor += 2;
+    }
+    if (current_v7) {
+        decoded.idle_timeout_before_lp1_seconds = *cursor++;
+        decoded.lp1_timeout_before_lp2_20s_units = *cursor++;
     }
 
     if (!validate_tps43_tuning(decoded)) {
@@ -404,6 +418,29 @@ bool set_configured_tps43_scroll_gain(const tps43_scroll_gain_tuning_t& controls
         controls.fast_speed_limit_counts_per_second;
     candidate.active_scroll_gain.slow_gain_percent = controls.slow_gain_percent;
     candidate.active_scroll_gain.fast_gain_percent = controls.fast_gain_percent;
+    if (!validate_tps43_tuning(candidate)) {
+        return false;
+    }
+
+    set_configured_tps43_tuning(candidate);
+    return true;
+}
+
+bool get_configured_tps43_power_mode_timeouts(tps43_power_mode_timeouts_t* timeouts) {
+    if (timeouts == nullptr) {
+        return false;
+    }
+
+    const DualTps43Tuning tuning = configured_tps43_tuning();
+    timeouts->idle_timeout_seconds = tuning.idle_timeout_before_lp1_seconds;
+    timeouts->lp1_timeout_20s_units = tuning.lp1_timeout_before_lp2_20s_units;
+    return true;
+}
+
+bool set_configured_tps43_power_mode_timeouts(const tps43_power_mode_timeouts_t& timeouts) {
+    DualTps43Tuning candidate = configured_tps43_tuning();
+    candidate.idle_timeout_before_lp1_seconds = timeouts.idle_timeout_seconds;
+    candidate.lp1_timeout_before_lp2_20s_units = timeouts.lp1_timeout_20s_units;
     if (!validate_tps43_tuning(candidate)) {
         return false;
     }

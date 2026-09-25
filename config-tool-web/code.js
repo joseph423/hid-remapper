@@ -8,7 +8,7 @@ const STICKY_FLAG = 1 << 0;
 const TAP_FLAG = 1 << 1;
 const HOLD_FLAG = 1 << 2;
 const CONFIG_SIZE = 32;
-const CONFIG_VERSION = 25;
+const CONFIG_VERSION = 26;
 const VENDOR_ID = 0xCAFE;
 const PRODUCT_ID = 0xBAF2;
 const DEFAULT_PARTIAL_SCROLL_TIMEOUT = 1000000;
@@ -23,6 +23,8 @@ const DEFAULT_TPS43_TUNING = {
     'left_assisted_drag_axis_threshold': 2,
     'cursor_base_scale_q8': 128,
     'scroll_base_scale_q8': 4,
+    'idle_timeout_before_lp1_seconds': 10,
+    'lp1_timeout_before_lp2_seconds': 20,
     'subthreshold_cursor_expiry_ms': 50,
     'subthreshold_cursor_threshold': 2,
     'cursor_temporal_filter_enabled': true,
@@ -88,6 +90,8 @@ const GET_TPS43_CURSOR_FILTER = 29;
 const SET_TPS43_CURSOR_FILTER = 30;
 const GET_TPS43_SCROLL_GAIN = 31;
 const SET_TPS43_SCROLL_GAIN = 32;
+const GET_TPS43_POWER_MODE_TIMEOUTS = 33;
+const SET_TPS43_POWER_MODE_TIMEOUTS = 34;
 
 const PERSIST_CONFIG_SUCCESS = 1;
 const PERSIST_CONFIG_CONFIG_TOO_BIG = 2;
@@ -233,6 +237,8 @@ document.addEventListener("DOMContentLoaded", function () {
     document.getElementById("tps43_drag_threshold_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_cursor_base_scale_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_scroll_base_scale_input").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_idle_timeout_before_lp1_input").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_lp1_timeout_before_lp2_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_cursor_subthreshold_expiry_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_cursor_subthreshold_threshold_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_cursor_temporal_filter_enabled").addEventListener("change", tps43_tuning_onchange);
@@ -398,6 +404,12 @@ async function load_from_device() {
         config['tps43_tuning']['active_scroll_slow_gain_percent'] = active_scroll_slow_gain_percent;
         config['tps43_tuning']['active_scroll_fast_gain_percent'] = active_scroll_fast_gain_percent;
 
+        await send_feature_command(GET_TPS43_POWER_MODE_TIMEOUTS);
+        const [idle_timeout_before_lp1_seconds, lp1_timeout_before_lp2_20s_units] =
+            await read_config_feature([UINT8, UINT8]);
+        config['tps43_tuning']['idle_timeout_before_lp1_seconds'] = idle_timeout_before_lp1_seconds;
+        config['tps43_tuning']['lp1_timeout_before_lp2_seconds'] = lp1_timeout_before_lp2_20s_units * 20;
+
         for (let i = 0; i < mapping_count; i++) {
             await send_feature_command(GET_MAPPING, [[UINT32, i]]);
             const [target_usage, source_usage, scaling, layer_mask, mapping_flags, hub_ports] =
@@ -531,6 +543,17 @@ async function save_to_device() {
 
     try {
         const tps43_tuning = config['tps43_tuning'];
+        if (!Number.isInteger(tps43_tuning['idle_timeout_before_lp1_seconds']) ||
+            tps43_tuning['idle_timeout_before_lp1_seconds'] < 1 ||
+            tps43_tuning['idle_timeout_before_lp1_seconds'] > 254) {
+            throw new Error('Idle-to-LP1 timeout must be between 1 and 254 seconds.');
+        }
+        if (!Number.isInteger(tps43_tuning['lp1_timeout_before_lp2_seconds']) ||
+            tps43_tuning['lp1_timeout_before_lp2_seconds'] < 20 ||
+            tps43_tuning['lp1_timeout_before_lp2_seconds'] > 5080 ||
+            tps43_tuning['lp1_timeout_before_lp2_seconds'] % 20 !== 0) {
+            throw new Error('LP1-to-LP2 timeout must be 20–5,080 seconds in 20-second increments.');
+        }
         if (!Number.isInteger(tps43_tuning['subthreshold_cursor_threshold']) ||
             tps43_tuning['subthreshold_cursor_threshold'] < 1 ||
             tps43_tuning['subthreshold_cursor_threshold'] > 255) {
@@ -602,6 +625,10 @@ async function save_to_device() {
             [UINT16, tps43_tuning['active_scroll_fast_speed_limit_counts_per_second']],
             [UINT16, tps43_tuning['active_scroll_slow_gain_percent']],
             [UINT16, tps43_tuning['active_scroll_fast_gain_percent']],
+        ]);
+        await send_feature_command(SET_TPS43_POWER_MODE_TIMEOUTS, [
+            [UINT8, tps43_tuning['idle_timeout_before_lp1_seconds']],
+            [UINT8, tps43_tuning['lp1_timeout_before_lp2_seconds'] / 20],
         ]);
         await send_feature_command(CLEAR_MAPPING);
 
@@ -789,6 +816,10 @@ function set_config_ui_state() {
     document.getElementById('tps43_drag_threshold_input').value = tps43_tuning['left_assisted_drag_axis_threshold'];
     document.getElementById('tps43_cursor_base_scale_input').value = tps43_tuning['cursor_base_scale_q8'];
     document.getElementById('tps43_scroll_base_scale_input').value = tps43_tuning['scroll_base_scale_q8'];
+    document.getElementById('tps43_idle_timeout_before_lp1_input').value =
+        tps43_tuning['idle_timeout_before_lp1_seconds'];
+    document.getElementById('tps43_lp1_timeout_before_lp2_input').value =
+        tps43_tuning['lp1_timeout_before_lp2_seconds'];
     document.getElementById('tps43_cursor_subthreshold_expiry_input').value = tps43_tuning['subthreshold_cursor_expiry_ms'];
     document.getElementById('tps43_cursor_subthreshold_threshold_input').value = tps43_tuning['subthreshold_cursor_threshold'];
     document.getElementById('tps43_cursor_temporal_filter_enabled').checked =
@@ -955,6 +986,11 @@ function set_ui_state() {
     }
     if (config['tps43_tuning']['subthreshold_cursor_threshold'] === undefined) {
         config['tps43_tuning']['subthreshold_cursor_threshold'] = DEFAULT_TPS43_TUNING['subthreshold_cursor_threshold'];
+    }
+    for (const key of ['idle_timeout_before_lp1_seconds', 'lp1_timeout_before_lp2_seconds']) {
+        if (config['tps43_tuning'][key] === undefined) {
+            config['tps43_tuning'][key] = DEFAULT_TPS43_TUNING[key];
+        }
     }
     if (config['tps43_tuning']['cursor_temporal_filter_enabled'] === undefined) {
         config['tps43_tuning']['cursor_temporal_filter_enabled'] = DEFAULT_TPS43_TUNING['cursor_temporal_filter_enabled'];
@@ -1229,7 +1265,7 @@ async function check_device_version() {
     // device because it could be version X, ignore our GET_CONFIG call with version Y and
     // just happen to have Y at the right place in the buffer from some previous call done
     // by some other software.
-    for (const version of [CONFIG_VERSION, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
+    for (const version of [CONFIG_VERSION, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
         await send_feature_command(GET_CONFIG, [], version);
         const [received_version] = await read_config_feature([UINT8]);
         if (received_version == version) {
@@ -1621,6 +1657,8 @@ function tps43_tuning_onchange() {
         ['left_assisted_drag_axis_threshold', 'tps43_drag_threshold_input', 1],
         ['cursor_base_scale_q8', 'tps43_cursor_base_scale_input', 0],
         ['scroll_base_scale_q8', 'tps43_scroll_base_scale_input', 0],
+        ['idle_timeout_before_lp1_seconds', 'tps43_idle_timeout_before_lp1_input', 1, 254],
+        ['lp1_timeout_before_lp2_seconds', 'tps43_lp1_timeout_before_lp2_input', 20, 5080],
         ['subthreshold_cursor_expiry_ms', 'tps43_cursor_subthreshold_expiry_input', 1, 65535],
         ['subthreshold_cursor_threshold', 'tps43_cursor_subthreshold_threshold_input', 1, 255],
         ['cursor_filter_slow_speed_limit_counts_per_second', 'tps43_cursor_filter_slow_speed_limit', 1, 9999],
@@ -1640,6 +1678,12 @@ function tps43_tuning_onchange() {
             document.getElementById(element_id).value = value;
         }
         config['tps43_tuning'][key] = value;
+    }
+    if (config['tps43_tuning']['lp1_timeout_before_lp2_seconds'] % 20 !== 0) {
+        config['tps43_tuning']['lp1_timeout_before_lp2_seconds'] =
+            DEFAULT_TPS43_TUNING['lp1_timeout_before_lp2_seconds'];
+        document.getElementById('tps43_lp1_timeout_before_lp2_input').value =
+            config['tps43_tuning']['lp1_timeout_before_lp2_seconds'];
     }
     config['tps43_tuning']['cursor_temporal_filter_enabled'] =
         document.getElementById('tps43_cursor_temporal_filter_enabled').checked;
