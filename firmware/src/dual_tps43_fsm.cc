@@ -46,6 +46,7 @@ void DualTps43Fsm::reset() {
     right_latched_saw_inactive_ = false;
     right_latched_drop_session_id_ = 0;
     cursor_motion_ = {};
+    reset_cursor_temporal_filter();
     pending_cursor_x_ = 0;
     pending_cursor_y_ = 0;
     pending_cursor_since_us_ = 0;
@@ -55,6 +56,9 @@ void DualTps43Fsm::reset() {
 
 LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
     scroll_source_this_cycle_ = ScrollSource::None;
+    if (snapshot.right.touch_started) {
+        reset_cursor_temporal_filter();
+    }
     if (snapshot.right.touch_started || snapshot.right.touch_ended) {
         pending_cursor_x_ = 0;
         pending_cursor_y_ = 0;
@@ -481,6 +485,11 @@ void DualTps43Fsm::add_right_scroll(const PadState& right, LogicalActions& actio
     }
 }
 
+void DualTps43Fsm::reset_cursor_temporal_filter() {
+    filtered_cursor_x_q8_ = 0;
+    filtered_cursor_y_q8_ = 0;
+}
+
 void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions& actions) {
     // Momentum belongs to the released touch sequence. A new touch starts a
     // new interaction and must also preserve neutral/locked modes' no-scroll
@@ -497,10 +506,49 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
         actions.cursor_y = cursor.y;
         actions.cursor_x_q8 = cursor.x_q8;
         actions.cursor_y_q8 = cursor.y_q8;
-    } else if (snapshot.right.fresh_sample) {
+        if (tuning_.cursor_temporal_filter_enabled) {
+            // Classify scaled max-axis speed so the bands stay meaningful if
+            // the sensor's sample interval changes. Each band has its own
+            // configured weight; the weights do not derive from one another.
+            const uint32_t sample_interval_us = std::max<uint32_t>(cursor.sample_interval_us, 1);
+            const uint64_t x_speed_q8_per_second = absolute_int64(
+                multiply_divide_saturated(cursor.x_q8, 1000000, sample_interval_us));
+            const uint64_t y_speed_q8_per_second = absolute_int64(
+                multiply_divide_saturated(cursor.y_q8, 1000000, sample_interval_us));
+            const uint64_t max_axis_speed_q8_per_second = std::max(
+                x_speed_q8_per_second, y_speed_q8_per_second);
+            uint32_t previous_weight = tuning_.cursor_filter_slow_weight_percent;
+            if (max_axis_speed_q8_per_second >
+                tuning_.cursor_filter_fast_speed_limit_counts_per_second * 256ULL) {
+                previous_weight = tuning_.cursor_filter_fast_weight_percent;
+            } else if (max_axis_speed_q8_per_second >
+                       tuning_.cursor_filter_slow_speed_limit_counts_per_second * 256ULL) {
+                previous_weight = tuning_.cursor_filter_normal_weight_percent;
+            }
+            const uint32_t current_weight = 100 - previous_weight;
+            const auto blend = [current_weight, previous_weight](int64_t current, int64_t previous) {
+                // Split before multiplying to keep the weighted sum safe for
+                // every representable Q8 cursor delta without floating point.
+                return (current / 100) * current_weight + (current % 100) * current_weight / 100 +
+                       (previous / 100) * previous_weight + (previous % 100) * previous_weight / 100;
+            };
+            filtered_cursor_x_q8_ = blend(cursor.x_q8, filtered_cursor_x_q8_);
+            filtered_cursor_y_q8_ = blend(cursor.y_q8, filtered_cursor_y_q8_);
+            actions.cursor_x_q8 = filtered_cursor_x_q8_;
+            actions.cursor_y_q8 = filtered_cursor_y_q8_;
+            actions.cursor_x = saturate_int32(filtered_cursor_x_q8_ / 256);
+            actions.cursor_y = saturate_int32(filtered_cursor_y_q8_ / 256);
+        } else {
+            reset_cursor_temporal_filter();
+        }
+    } else if (snapshot.right.fresh_sample || snapshot.right.touch_ended) {
         // Velocity history and fractional output must not move the cursor after
-        // the normalized input stops.
+        // the normalized input stops. The temporal filter is reset rather than
+        // emitting its residual as a post-stop cursor tail.
         stop_cursor_motion();
+    }
+    if (snapshot.right.touch_ended) {
+        reset_cursor_temporal_filter();
     }
 
     if (mode_ == Mode::RightLatchedDrag || mode_ == Mode::LeftAssistedDrag) {
@@ -593,6 +641,7 @@ void DualTps43Fsm::stop_cursor_motion() {
     cursor_motion_.filtered_speed_pad_units_per_second = 0;
     cursor_motion_.residual_x_q8 = 0;
     cursor_motion_.residual_y_q8 = 0;
+    reset_cursor_temporal_filter();
 }
 
 void DualTps43Fsm::update_scroll_release_velocity(const ScaledDelta& delta) {

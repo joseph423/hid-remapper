@@ -128,6 +128,111 @@ void run_case(const char* name, const std::function<void()>& test) {
 }  // namespace
 
 int main() {
+    run_case("MOTION-18 adaptive-cursor-filter-uses-speed-bands-only-on-cursor", [] {
+        DualTps43Tuning tuning = motion_tuning();
+        tuning.cursor_gain = { 256, 256, 4000, 256, 15000 };
+        tuning.subthreshold_cursor_threshold = 1;
+        tuning.cursor_temporal_filter_enabled = true;
+        tuning.cursor_filter_slow_speed_limit_counts_per_second = 80;
+        tuning.cursor_filter_fast_speed_limit_counts_per_second = 300;
+        tuning.cursor_filter_slow_weight_percent = 20;
+        tuning.cursor_filter_normal_weight_percent = 10;
+        tuning.cursor_filter_fast_weight_percent = 0;
+
+        Harness slow(tuning);
+        slow.step(inactive(), one_finger(), 13000);
+        const LogicalActions slow_first = slow.step(inactive(), one_finger(1, 0), 13000);
+        const LogicalActions slow_second = slow.step(inactive(), one_finger(1, 0), 13000);
+        require(slow_first.cursor_x_q8 == 204,
+            "very slow input at or below the slow limit must use the configured slow-band weight");
+        require(slow_second.cursor_x_q8 == 244,
+            "very slow input must continue blending with the previous filtered output");
+
+        Harness normal(tuning);
+        normal.step(inactive(), one_finger(), 8000);
+        const LogicalActions normal_first = normal.step(inactive(), one_finger(1, 0), 8000);
+        require(normal_first.cursor_x_q8 == 230,
+            "normal input above the slow and at or below the fast limit must use its configured weight");
+
+        Harness fast(tuning);
+        fast.step(inactive(), one_finger(), 8000);
+        const LogicalActions fast_first = fast.step(inactive(), one_finger(3, 0), 8000);
+        require(fast_first.cursor_x_q8 == 768,
+            "fast input above the fast limit must use its configured weight");
+
+        const LogicalActions scroll = slow.step(two_finger(), two_finger(), 8000);
+        require(scroll.cursor_x_q8 == 0 && scroll.cursor_y_q8 == 0,
+            "scroll-only input must not create cursor output");
+        const LogicalActions scrolling = slow.step(two_finger(0, 1), two_finger(), 8000);
+        require(scrolling.scroll_y_q8 != 0, "cursor filtering must leave active scroll available");
+
+        tuning.cursor_filter_slow_weight_percent = 100;
+        Harness extreme(tuning);
+        extreme.step(inactive(), one_finger(), 13000);
+        const LogicalActions extreme_slow = extreme.step(inactive(), one_finger(1, 0), 13000);
+        require(extreme_slow.cursor_x_q8 == 0,
+            "100% previous-output weight should make the slow-band effect unmistakable");
+
+        tuning.cursor_filter_slow_speed_limit_counts_per_second = 150;
+        tuning.cursor_filter_fast_speed_limit_counts_per_second = 400;
+        tuning.cursor_filter_slow_weight_percent = 30;
+        tuning.cursor_filter_normal_weight_percent = 40;
+        tuning.cursor_filter_fast_weight_percent = 50;
+        Harness customized(tuning);
+        customized.step(inactive(), one_finger(), 8000);
+        const LogicalActions customized_slow = customized.step(inactive(), one_finger(1, 0), 8000);
+        require(customized_slow.cursor_x_q8 == 179,
+            "custom slow cutoff and weight must be applied to the slow band");
+
+        Harness customized_normal(tuning);
+        customized_normal.step(inactive(), one_finger(), 8000);
+        const LogicalActions normal_boundary = customized_normal.step(inactive(), one_finger(2, 0), 8000);
+        require(normal_boundary.cursor_x_q8 == 307,
+            "custom normal-band weight must be independent of the slow-band weight");
+
+        Harness customized_fast(tuning);
+        customized_fast.step(inactive(), one_finger(), 8000);
+        const LogicalActions fast_boundary = customized_fast.step(inactive(), one_finger(4, 0), 8000);
+        require(fast_boundary.cursor_x_q8 == 512,
+            "custom fast-band weight must be independently applied above the fast cutoff");
+    });
+
+    run_case("MOTION-19 cursor-filter-disable-and-stop-reset", [] {
+        DualTps43Tuning tuning = motion_tuning();
+        tuning.cursor_gain = { 256, 256, 4000, 256, 15000 };
+        tuning.subthreshold_cursor_threshold = 1;
+        tuning.cursor_temporal_filter_enabled = true;
+        tuning.cursor_filter_slow_weight_percent = 20;
+        tuning.cursor_filter_normal_weight_percent = 10;
+        tuning.cursor_filter_fast_weight_percent = 0;
+        Harness filtered(tuning);
+        filtered.step(inactive(), one_finger(), 13000);
+        const LogicalActions first = filtered.step(inactive(), one_finger(1, 0), 13000);
+        require(first.cursor_x_q8 == 204, "enabled slow band must apply its adaptive filter strength");
+
+        const LogicalActions stopped = filtered.step(inactive(), one_finger(), 13000);
+        require(stopped.cursor_x_q8 == 0 && stopped.cursor_y_q8 == 0,
+            "zero-motion sample must reset without emitting a filter tail");
+        const LogicalActions restarted = filtered.step(inactive(), one_finger(1, 0), 13000);
+        require(restarted.cursor_x_q8 == 204,
+            "movement after a stop must start with clean filter state");
+
+        const LogicalActions lifted = filtered.step(inactive(), inactive(), 13000);
+        require(lifted.cursor_x_q8 == 0 && lifted.cursor_y_q8 == 0,
+            "finger lift must discard filter residual without emitting cursor movement");
+        filtered.step(inactive(), one_finger(), 13000);
+        const LogicalActions after_lift = filtered.step(inactive(), one_finger(1, 0), 13000);
+        require(after_lift.cursor_x_q8 == 204,
+            "a new touch after lift must start with clean filter state");
+
+        tuning.cursor_temporal_filter_enabled = false;
+        Harness unfiltered(tuning);
+        unfiltered.step(inactive(), one_finger(), 13000);
+        const LogicalActions passthrough = unfiltered.step(inactive(), one_finger(1, 0), 13000);
+        require(passthrough.cursor_x_q8 == 256,
+            "disabled filter must preserve the original scaled cursor delta");
+    });
+
     run_case("MOTION-01 slow-versus-fast-cursor-gain", [] {
         Harness slow;
         slow.step(inactive(), one_finger(), 10000);

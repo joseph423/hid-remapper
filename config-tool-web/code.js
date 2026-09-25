@@ -8,7 +8,7 @@ const STICKY_FLAG = 1 << 0;
 const TAP_FLAG = 1 << 1;
 const HOLD_FLAG = 1 << 2;
 const CONFIG_SIZE = 32;
-const CONFIG_VERSION = 22;
+const CONFIG_VERSION = 24;
 const VENDOR_ID = 0xCAFE;
 const PRODUCT_ID = 0xBAF2;
 const DEFAULT_PARTIAL_SCROLL_TIMEOUT = 1000000;
@@ -25,6 +25,12 @@ const DEFAULT_TPS43_TUNING = {
     'scroll_base_scale_q8': 4,
     'subthreshold_cursor_expiry_ms': 50,
     'subthreshold_cursor_threshold': 2,
+    'cursor_temporal_filter_enabled': true,
+    'cursor_filter_slow_speed_limit_counts_per_second': 500,
+    'cursor_filter_fast_speed_limit_counts_per_second': 2000,
+    'cursor_filter_slow_weight_percent': 20,
+    'cursor_filter_normal_weight_percent': 10,
+    'cursor_filter_fast_weight_percent': 0,
 };
 
 const NLAYERS = 8;
@@ -73,6 +79,8 @@ const GET_QUIRK = 25;
 const GET_TPS43_TUNING = 26;
 const SET_TPS43_TUNING = 27;
 const SET_TPS43_CURSOR_THRESHOLD = 28;
+const GET_TPS43_CURSOR_FILTER = 29;
+const SET_TPS43_CURSOR_FILTER = 30;
 
 const PERSIST_CONFIG_SUCCESS = 1;
 const PERSIST_CONFIG_CONFIG_TOO_BIG = 2;
@@ -220,6 +228,12 @@ document.addEventListener("DOMContentLoaded", function () {
     document.getElementById("tps43_scroll_base_scale_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_cursor_subthreshold_expiry_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_cursor_subthreshold_threshold_input").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_cursor_temporal_filter_enabled").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_cursor_filter_slow_speed_limit").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_cursor_filter_fast_speed_limit").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_cursor_filter_slow_weight").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_cursor_filter_normal_weight").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_cursor_filter_fast_weight").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("gpio_debounce_time_input").addEventListener("change", gpio_debounce_time_onchange);
     document.getElementById("macro_entry_duration_input").addEventListener("change", macro_entry_duration_onchange);
     for (let i = 0; i < NLAYERS; i++) {
@@ -344,6 +358,20 @@ async function load_from_device() {
             subthreshold_cursor_expiry_ms,
             subthreshold_cursor_threshold,
         };
+
+        await send_feature_command(GET_TPS43_CURSOR_FILTER);
+        const [cursor_temporal_filter_enabled, cursor_filter_slow_speed_limit_counts_per_second,
+            cursor_filter_fast_speed_limit_counts_per_second, cursor_filter_slow_weight_percent,
+            cursor_filter_normal_weight_percent, cursor_filter_fast_weight_percent] =
+            await read_config_feature([UINT8, UINT16, UINT16, UINT8, UINT8, UINT8]);
+        config['tps43_tuning']['cursor_temporal_filter_enabled'] = !!cursor_temporal_filter_enabled;
+        config['tps43_tuning']['cursor_filter_slow_speed_limit_counts_per_second'] =
+            cursor_filter_slow_speed_limit_counts_per_second;
+        config['tps43_tuning']['cursor_filter_fast_speed_limit_counts_per_second'] =
+            cursor_filter_fast_speed_limit_counts_per_second;
+        config['tps43_tuning']['cursor_filter_slow_weight_percent'] = cursor_filter_slow_weight_percent;
+        config['tps43_tuning']['cursor_filter_normal_weight_percent'] = cursor_filter_normal_weight_percent;
+        config['tps43_tuning']['cursor_filter_fast_weight_percent'] = cursor_filter_fast_weight_percent;
 
         for (let i = 0; i < mapping_count; i++) {
             await send_feature_command(GET_MAPPING, [[UINT32, i]]);
@@ -483,6 +511,18 @@ async function save_to_device() {
             tps43_tuning['subthreshold_cursor_threshold'] > 255) {
             throw new Error('Sub-threshold cursor threshold must be between 1 and 255.');
         }
+        const slow_speed_limit = tps43_tuning['cursor_filter_slow_speed_limit_counts_per_second'];
+        const fast_speed_limit = tps43_tuning['cursor_filter_fast_speed_limit_counts_per_second'];
+        if (!Number.isInteger(slow_speed_limit) || slow_speed_limit < 1 || slow_speed_limit >= fast_speed_limit ||
+            !Number.isInteger(fast_speed_limit) || fast_speed_limit > 10000) {
+            throw new Error('Cursor filter speed limits must be ordered and within 1–10,000 counts/s.');
+        }
+        for (const key of ['cursor_filter_slow_weight_percent', 'cursor_filter_normal_weight_percent',
+            'cursor_filter_fast_weight_percent']) {
+            if (!Number.isInteger(tps43_tuning[key]) || tps43_tuning[key] < 0 || tps43_tuning[key] > 100) {
+                throw new Error('Each cursor filter band weight must be between 0 and 100%.');
+            }
+        }
         await send_feature_command(SUSPEND);
         const flags = (config['ignore_auth_dev_inputs'] ? IGNORE_AUTH_DEV_INPUTS_FLAG : 0) |
             (config['gpio_output_mode'] ? GPIO_OUTPUT_MODE_FLAG : 0) |
@@ -511,6 +551,14 @@ async function save_to_device() {
         ]);
         await send_feature_command(SET_TPS43_CURSOR_THRESHOLD, [
             [UINT8, tps43_tuning['subthreshold_cursor_threshold']],
+        ]);
+        await send_feature_command(SET_TPS43_CURSOR_FILTER, [
+            [UINT8, tps43_tuning['cursor_temporal_filter_enabled'] ? 1 : 0],
+            [UINT16, tps43_tuning['cursor_filter_slow_speed_limit_counts_per_second']],
+            [UINT16, tps43_tuning['cursor_filter_fast_speed_limit_counts_per_second']],
+            [UINT8, tps43_tuning['cursor_filter_slow_weight_percent']],
+            [UINT8, tps43_tuning['cursor_filter_normal_weight_percent']],
+            [UINT8, tps43_tuning['cursor_filter_fast_weight_percent']],
         ]);
         await send_feature_command(CLEAR_MAPPING);
 
@@ -700,6 +748,15 @@ function set_config_ui_state() {
     document.getElementById('tps43_scroll_base_scale_input').value = tps43_tuning['scroll_base_scale_q8'];
     document.getElementById('tps43_cursor_subthreshold_expiry_input').value = tps43_tuning['subthreshold_cursor_expiry_ms'];
     document.getElementById('tps43_cursor_subthreshold_threshold_input').value = tps43_tuning['subthreshold_cursor_threshold'];
+    document.getElementById('tps43_cursor_temporal_filter_enabled').checked =
+        tps43_tuning['cursor_temporal_filter_enabled'];
+    document.getElementById('tps43_cursor_filter_slow_speed_limit').value =
+        tps43_tuning['cursor_filter_slow_speed_limit_counts_per_second'];
+    document.getElementById('tps43_cursor_filter_fast_speed_limit').value =
+        tps43_tuning['cursor_filter_fast_speed_limit_counts_per_second'];
+    document.getElementById('tps43_cursor_filter_slow_weight').value = tps43_tuning['cursor_filter_slow_weight_percent'];
+    document.getElementById('tps43_cursor_filter_normal_weight').value = tps43_tuning['cursor_filter_normal_weight_percent'];
+    document.getElementById('tps43_cursor_filter_fast_weight').value = tps43_tuning['cursor_filter_fast_weight_percent'];
 }
 
 function set_mappings_ui_state() {
@@ -846,6 +903,31 @@ function set_ui_state() {
     if (config['tps43_tuning']['subthreshold_cursor_threshold'] === undefined) {
         config['tps43_tuning']['subthreshold_cursor_threshold'] = DEFAULT_TPS43_TUNING['subthreshold_cursor_threshold'];
     }
+    if (config['tps43_tuning']['cursor_temporal_filter_enabled'] === undefined) {
+        config['tps43_tuning']['cursor_temporal_filter_enabled'] = DEFAULT_TPS43_TUNING['cursor_temporal_filter_enabled'];
+    }
+    const old_filter_weight = config['tps43_tuning']['cursor_temporal_filter_previous_weight_percent'];
+    if (config['tps43_tuning']['cursor_filter_slow_speed_limit_counts_per_second'] === undefined) {
+        config['tps43_tuning']['cursor_filter_slow_speed_limit_counts_per_second'] =
+            DEFAULT_TPS43_TUNING['cursor_filter_slow_speed_limit_counts_per_second'];
+    }
+    if (config['tps43_tuning']['cursor_filter_fast_speed_limit_counts_per_second'] === undefined) {
+        config['tps43_tuning']['cursor_filter_fast_speed_limit_counts_per_second'] =
+            DEFAULT_TPS43_TUNING['cursor_filter_fast_speed_limit_counts_per_second'];
+    }
+    if (config['tps43_tuning']['cursor_filter_slow_weight_percent'] === undefined) {
+        config['tps43_tuning']['cursor_filter_slow_weight_percent'] = old_filter_weight === undefined
+            ? DEFAULT_TPS43_TUNING['cursor_filter_slow_weight_percent'] : old_filter_weight;
+    }
+    if (config['tps43_tuning']['cursor_filter_normal_weight_percent'] === undefined) {
+        config['tps43_tuning']['cursor_filter_normal_weight_percent'] = old_filter_weight === undefined
+            ? DEFAULT_TPS43_TUNING['cursor_filter_normal_weight_percent'] : Math.floor(old_filter_weight / 2);
+    }
+    if (config['tps43_tuning']['cursor_filter_fast_weight_percent'] === undefined) {
+        config['tps43_tuning']['cursor_filter_fast_weight_percent'] =
+            DEFAULT_TPS43_TUNING['cursor_filter_fast_weight_percent'];
+    }
+    delete config['tps43_tuning']['cursor_temporal_filter_previous_weight_percent'];
     if (config['version'] < CONFIG_VERSION) {
         config['version'] = CONFIG_VERSION;
     }
@@ -1071,7 +1153,7 @@ function add_crc(data) {
 }
 
 function check_json_version(config_version) {
-    if (!([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22].includes(config_version))) {
+    if (!Number.isInteger(config_version) || config_version < 3 || config_version > CONFIG_VERSION) {
         throw new Error("Incompatible version.");
     }
 }
@@ -1087,7 +1169,7 @@ async function check_device_version() {
     // device because it could be version X, ignore our GET_CONFIG call with version Y and
     // just happen to have Y at the right place in the buffer from some previous call done
     // by some other software.
-    for (const version of [CONFIG_VERSION, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
+    for (const version of [CONFIG_VERSION, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
         await send_feature_command(GET_CONFIG, [], version);
         const [received_version] = await read_config_feature([UINT8]);
         if (received_version == version) {
@@ -1481,6 +1563,11 @@ function tps43_tuning_onchange() {
         ['scroll_base_scale_q8', 'tps43_scroll_base_scale_input', 0],
         ['subthreshold_cursor_expiry_ms', 'tps43_cursor_subthreshold_expiry_input', 1, 65535],
         ['subthreshold_cursor_threshold', 'tps43_cursor_subthreshold_threshold_input', 1, 255],
+        ['cursor_filter_slow_speed_limit_counts_per_second', 'tps43_cursor_filter_slow_speed_limit', 1, 9999],
+        ['cursor_filter_fast_speed_limit_counts_per_second', 'tps43_cursor_filter_fast_speed_limit', 2, 10000],
+        ['cursor_filter_slow_weight_percent', 'tps43_cursor_filter_slow_weight', 0, 100],
+        ['cursor_filter_normal_weight_percent', 'tps43_cursor_filter_normal_weight', 0, 100],
+        ['cursor_filter_fast_weight_percent', 'tps43_cursor_filter_fast_weight', 0, 100],
     ];
     for (const [key, element_id, minimum, maximum] of fields) {
         let value = parseInt(document.getElementById(element_id).value, 10);
@@ -1490,6 +1577,8 @@ function tps43_tuning_onchange() {
         }
         config['tps43_tuning'][key] = value;
     }
+    config['tps43_tuning']['cursor_temporal_filter_enabled'] =
+        document.getElementById('tps43_cursor_temporal_filter_enabled').checked;
 }
 
 function gpio_debounce_time_onchange() {

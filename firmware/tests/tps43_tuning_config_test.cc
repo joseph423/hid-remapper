@@ -30,6 +30,14 @@ void assert_equal(const DualTps43Tuning& expected, const DualTps43Tuning& actual
            actual.scroll_momentum.stop_velocity_logical_units_per_second);
     assert(expected.subthreshold_cursor_expiry_us == actual.subthreshold_cursor_expiry_us);
     assert(expected.subthreshold_cursor_threshold == actual.subthreshold_cursor_threshold);
+    assert(expected.cursor_temporal_filter_enabled == actual.cursor_temporal_filter_enabled);
+    assert(expected.cursor_filter_slow_speed_limit_counts_per_second ==
+           actual.cursor_filter_slow_speed_limit_counts_per_second);
+    assert(expected.cursor_filter_fast_speed_limit_counts_per_second ==
+           actual.cursor_filter_fast_speed_limit_counts_per_second);
+    assert(expected.cursor_filter_slow_weight_percent == actual.cursor_filter_slow_weight_percent);
+    assert(expected.cursor_filter_normal_weight_percent == actual.cursor_filter_normal_weight_percent);
+    assert(expected.cursor_filter_fast_weight_percent == actual.cursor_filter_fast_weight_percent);
 }
 
 }  // namespace
@@ -38,6 +46,12 @@ int main() {
     const DualTps43Tuning defaults = production_tuning();
     assert(validate_tps43_tuning(defaults));
     assert(defaults.subthreshold_cursor_threshold == 2);
+    assert(defaults.cursor_temporal_filter_enabled);
+    assert(defaults.cursor_filter_slow_speed_limit_counts_per_second == 500);
+    assert(defaults.cursor_filter_fast_speed_limit_counts_per_second == 2000);
+    assert(defaults.cursor_filter_slow_weight_percent == 20);
+    assert(defaults.cursor_filter_normal_weight_percent == 10);
+    assert(defaults.cursor_filter_fast_weight_percent == 0);
     assert_equal(defaults, configured_tps43_tuning());
 
     DualTps43Tuning configured = defaults;
@@ -75,6 +89,34 @@ int main() {
     assert(decode_tps43_tuning(legacy_v1, sizeof(legacy_v1), &decoded));
     assert(decoded.subthreshold_cursor_expiry_us == defaults.subthreshold_cursor_expiry_us);
     assert(decoded.subthreshold_cursor_threshold == defaults.subthreshold_cursor_threshold);
+    assert(decoded.cursor_temporal_filter_enabled);
+    assert(decoded.cursor_filter_slow_weight_percent == 20);
+
+    uint8_t legacy_v3[kTps43TuningBlockV3Size] = {};
+    for (std::size_t i = 0; i < sizeof(legacy_v3); i++) {
+        legacy_v3[i] = buffer[i];
+    }
+    legacy_v3[4] = 3;
+    legacy_v3[6] = static_cast<uint8_t>(kTps43TuningBlockV3Size);
+    legacy_v3[7] = static_cast<uint8_t>(kTps43TuningBlockV3Size >> 8);
+    assert(decode_tps43_tuning(legacy_v3, sizeof(legacy_v3), &decoded));
+    assert(decoded.cursor_temporal_filter_enabled);
+    assert(decoded.cursor_filter_slow_weight_percent == 20);
+
+    uint8_t legacy_v4[kTps43TuningBlockV4Size] = {};
+    for (std::size_t i = 0; i < sizeof(legacy_v4); i++) {
+        legacy_v4[i] = buffer[i];
+    }
+    legacy_v4[4] = 4;
+    legacy_v4[6] = static_cast<uint8_t>(kTps43TuningBlockV4Size);
+    legacy_v4[7] = static_cast<uint8_t>(kTps43TuningBlockV4Size >> 8);
+    legacy_v4[kTps43TuningBlockV4Size - 1] = 50;
+    assert(decode_tps43_tuning(legacy_v4, sizeof(legacy_v4), &decoded));
+    assert(decoded.cursor_filter_slow_weight_percent == 50);
+    assert(decoded.cursor_filter_normal_weight_percent == 25);
+    assert(decoded.cursor_filter_fast_weight_percent == 0);
+    assert(decoded.cursor_filter_slow_speed_limit_counts_per_second == 500);
+    assert(decoded.cursor_filter_fast_speed_limit_counts_per_second == 2000);
 
     uint8_t legacy_v2[kTps43TuningBlockV2Size] = {};
     for (std::size_t i = 0; i < sizeof(legacy_v2); i++) {
@@ -113,6 +155,13 @@ int main() {
     invalid.scroll_momentum.stop_velocity_logical_units_per_second = 1;
     assert(!validate_tps43_tuning(invalid));
     assert(!encode_tps43_tuning(invalid, buffer, sizeof(buffer)));
+    invalid = defaults;
+    invalid.cursor_filter_fast_speed_limit_counts_per_second =
+        invalid.cursor_filter_slow_speed_limit_counts_per_second;
+    assert(!validate_tps43_tuning(invalid));
+    invalid = defaults;
+    invalid.cursor_filter_slow_weight_percent = 101;
+    assert(!validate_tps43_tuning(invalid));
 
     tps43_runtime_tuning_set_t controls = {};
     tps43_runtime_tuning_t initial_controls = {};
@@ -164,6 +213,33 @@ int main() {
     assert(set_configured_tps43_cursor_threshold(4));
     assert(set_configured_tps43_cursor_threshold(255));
     assert(configured_tps43_tuning().subthreshold_cursor_threshold == 255);
+
+    tps43_cursor_filter_tuning_t filter_controls = {};
+    assert(get_configured_tps43_cursor_filter(&filter_controls));
+    assert(filter_controls.enabled == 1);
+    assert(filter_controls.slow_speed_limit_counts_per_second == 500);
+    assert(filter_controls.fast_speed_limit_counts_per_second == 2000);
+    assert(filter_controls.slow_weight_percent == 20);
+    assert(filter_controls.normal_weight_percent == 10);
+    assert(filter_controls.fast_weight_percent == 0);
+    filter_controls.enabled = 0;
+    filter_controls.slow_speed_limit_counts_per_second = 150;
+    filter_controls.fast_speed_limit_counts_per_second = 600;
+    filter_controls.slow_weight_percent = 100;
+    filter_controls.normal_weight_percent = 50;
+    filter_controls.fast_weight_percent = 10;
+    assert(set_configured_tps43_cursor_filter(filter_controls));
+    tps43_cursor_filter_tuning_t filter_round_trip = {};
+    assert(get_configured_tps43_cursor_filter(&filter_round_trip));
+    assert(filter_round_trip.enabled == 0);
+    assert(filter_round_trip.slow_speed_limit_counts_per_second == 150);
+    assert(filter_round_trip.fast_speed_limit_counts_per_second == 600);
+    assert(filter_round_trip.slow_weight_percent == 100);
+    assert(filter_round_trip.normal_weight_percent == 50);
+    assert(filter_round_trip.fast_weight_percent == 10);
+    assert(!set_configured_tps43_cursor_filter({ 2, 80, 300, 20, 10, 0 }));
+    assert(!set_configured_tps43_cursor_filter({ 1, 300, 100, 20, 10, 0 }));
+    assert(!set_configured_tps43_cursor_filter({ 1, 80, 300, 101, 10, 0 }));
 
     return 0;
 }

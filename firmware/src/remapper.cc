@@ -16,6 +16,7 @@
 #include "crc.h"
 #include "descriptor_parser.h"
 #include "globals.h"
+#include "mapped_layers.h"
 #include "our_descriptor.h"
 #include "platform.h"
 #include "remapper.h"
@@ -426,7 +427,6 @@ void set_mapping_from_config() {
     std::unordered_map<uint64_t, uint8_t> tap_sticky_usage_map;
     std::unordered_map<uint64_t, uint8_t> hold_sticky_usage_map;
     std::unordered_set<uint64_t> tap_hold_usage_set;
-    std::unordered_map<uint32_t, uint8_t> mapped_on_layers;  // usage -> layer mask
 
     std::size_t reverse_mapping_count = 0;
     std::size_t reverse_mapping_macro_count = 0;
@@ -511,8 +511,6 @@ void set_mapping_from_config() {
             if (mapping.flags & MAPPING_FLAG_STICKY) {
                 // sticky layer-triggering mappings are forces to NOT be present on the layer they trigger
                 layer_mask &= ~(1 << layer);
-                // but for unmapped passthrough purposes we pretend they are
-                mapped_on_layers[mapping.source_usage] |= (1 << layer) & ((1 << NLAYERS) - 1);
             } else {
                 // non-sticky layer-triggering mappings are forced to BE present on the layer they trigger
                 layer_mask |= (1 << layer) & ((1 << NLAYERS) - 1);
@@ -555,8 +553,6 @@ void set_mapping_from_config() {
             uint8_t expr = (mapping.source_usage & 0xFFFF) - 1;
             for (auto const& elem : expressions[expr]) {
                 if (elem.op == Op::PUSH_USAGE) {
-                    mapped_on_layers[elem.val] |= layer_mask;
-
                     // if a GPIO pin usage appears in an expression, it's an "in" pin
                     if ((elem.val & 0xFFFF0000) == GPIO_USAGE_PAGE) {
                         uint16_t pin = elem.val & 0xFFFF;
@@ -565,7 +561,6 @@ void set_mapping_from_config() {
                 }
             }
         }
-        mapped_on_layers[mapping.source_usage] |= layer_mask;  // usage mapped on any hub_port is considered to be mapped
         if ((mapping.flags & MAPPING_FLAG_STICKY) != 0) {
             if (mapping.flags & MAPPING_FLAG_TAP) {
                 tap_sticky_usage_map[((uint64_t) source_port << 32) | mapping.source_usage] |= layer_mask;
@@ -660,7 +655,10 @@ void set_mapping_from_config() {
 
     if (unmapped_passthrough_layer_mask) {
         for (auto const& [usage, usage_def] : our_usages_flat) {
-            uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_on_layers[usage];
+            uint8_t mapped_layers = mapped_layers_for_usage(
+                usage, config_mappings, expressions, LAYERS_USAGE_PAGE, EXPR_USAGE_PAGE,
+                MAPPING_FLAG_STICKY, NLAYERS, NEXPRESSIONS);
+            uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_layers;
             if (unmapped_layers) {
                 if (assign_state_slot(usage, 0, false)) {
                         append_mapping_source(0, usage, (map_source_t) {
@@ -674,7 +672,10 @@ void set_mapping_from_config() {
 
         for (auto const& array_usage : our_array_range_usages) {
             for (uint32_t usage = array_usage.usage; usage <= array_usage.usage_def.usage_maximum; usage++) {
-                uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_on_layers[usage];
+                uint8_t mapped_layers = mapped_layers_for_usage(
+                    usage, config_mappings, expressions, LAYERS_USAGE_PAGE, EXPR_USAGE_PAGE,
+                    MAPPING_FLAG_STICKY, NLAYERS, NEXPRESSIONS);
+                uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_layers;
                 if (unmapped_layers) {
                     if (assign_state_slot(usage, 0, false)) {
                         append_mapping_source(0, usage, (map_source_t) {
@@ -689,7 +690,10 @@ void set_mapping_from_config() {
 
         for (auto const& [report_id, usage_map] : their_usages[OUR_OUT_INTERFACE]) {
             for (auto const& [usage, usage_def] : usage_map) {
-                uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_on_layers[usage];
+                uint8_t mapped_layers = mapped_layers_for_usage(
+                    usage, config_mappings, expressions, LAYERS_USAGE_PAGE, EXPR_USAGE_PAGE,
+                    MAPPING_FLAG_STICKY, NLAYERS, NEXPRESSIONS);
+                uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_layers;
                 if (unmapped_layers) {
                     if (assign_state_slot(usage, 0, false)) {
                         append_mapping_source(0, usage, (map_source_t) {
@@ -702,9 +706,6 @@ void set_mapping_from_config() {
             }
         }
     }
-
-    // Passthrough expansion is the final consumer of this lookup table.
-    decltype(mapped_on_layers){}.swap(mapped_on_layers);
 
     auto finalize_mapping = [](reverse_mapping_t& rev_map) {
         uint32_t target = rev_map.target;

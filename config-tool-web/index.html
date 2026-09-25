@@ -222,6 +222,77 @@
                         <div class="form-text">Unclassified dx/dy counts accumulate per axis until this value (1–255; default 2). Larger values can delay or suppress slow movement.</div>
                     </div>
                 </div>
+                <div class="row mt-3 align-items-center">
+                    <div class="col-4 text-end">
+                        <label for="tps43_cursor_temporal_filter_enabled" class="col-form-label">Temporal cursor filter</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="tps43_cursor_temporal_filter_enabled">
+                            <label class="form-check-label" for="tps43_cursor_temporal_filter_enabled">Enabled for A/B test</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3 align-items-center">
+                    <div class="col-4 text-end">
+                        <label for="tps43_cursor_filter_slow_speed_limit" class="col-form-label">Slow-band upper speed</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="1" max="9999" step="1" id="tps43_cursor_filter_slow_speed_limit" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">counts/s</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3 align-items-center">
+                    <div class="col-4 text-end">
+                        <label for="tps43_cursor_filter_slow_weight" class="col-form-label">Slow-band filter weight</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="0" max="100" step="1" id="tps43_cursor_filter_slow_weight" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">% previous</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3 align-items-center">
+                    <div class="col-4 text-end">
+                        <label for="tps43_cursor_filter_fast_speed_limit" class="col-form-label">Normal-band upper speed</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="2" max="10000" step="1" id="tps43_cursor_filter_fast_speed_limit" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">counts/s</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3 align-items-center">
+                    <div class="col-4 text-end">
+                        <label for="tps43_cursor_filter_normal_weight" class="col-form-label">Normal-band filter weight</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="0" max="100" step="1" id="tps43_cursor_filter_normal_weight" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">% previous</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3 align-items-center">
+                    <div class="col-4 text-end">
+                        <label for="tps43_cursor_filter_fast_weight" class="col-form-label">Fast-band filter weight</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="0" max="100" step="1" id="tps43_cursor_filter_fast_weight" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">% previous</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="offset-4 col-auto">
+                        <div class="form-text">Speed uses the largest scaled X/Y cursor axis. Defaults: ≤80 counts/s uses 20%; &gt;80–300 uses 10%; &gt;300 uses 0%. Limits must be ordered and within 1–10,000 counts/s. Higher previous-output weight smooths more and may suppress movement at 100%. Untick the filter for A/B comparison.</div>
+                    </div>
+                </div>
                 <div class="row mt-3">
                     <div class="col-4 text-end">
                         <label for="gpio_debounce_time_input" class="col-form-label">GPIO debounce time</label>

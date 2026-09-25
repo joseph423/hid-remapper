@@ -10,10 +10,12 @@
 // The block is serialized field-by-field in little-endian order. It must not
 // depend on C++ structure padding or compiler ABI details.
 constexpr uint32_t kTps43TuningBlockMagic = 0x54343354;
-constexpr uint8_t kTps43TuningBlockVersion = 3;
+constexpr uint8_t kTps43TuningBlockVersion = 5;
 constexpr std::size_t kTps43TuningBlockV1Size = 78;
 constexpr std::size_t kTps43TuningBlockV2Size = 82;
-constexpr std::size_t kTps43TuningBlockSize = 83;
+constexpr std::size_t kTps43TuningBlockV3Size = 83;
+constexpr std::size_t kTps43TuningBlockV4Size = 85;
+constexpr std::size_t kTps43TuningBlockSize = 91;
 
 // Returns the approved production defaults used by the current physical
 // profile. The returned value is independent of persisted configuration.
@@ -52,5 +54,9 @@ bool set_configured_tps43_runtime_tuning(const tps43_runtime_tuning_set_t& contr
 
 // Updates the cursor threshold carried by its dedicated one-byte SET command.
 bool set_configured_tps43_cursor_threshold(uint8_t threshold);
+
+// Reads/writes the isolated temporal cursor-filter A/B setting.
+bool get_configured_tps43_cursor_filter(tps43_cursor_filter_tuning_t* controls);
+bool set_configured_tps43_cursor_filter(const tps43_cursor_filter_tuning_t& controls);
 
 #endif

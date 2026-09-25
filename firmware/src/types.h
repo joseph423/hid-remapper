@@ -35,6 +35,8 @@ enum class ConfigCommand : int8_t {
     GET_TPS43_TUNING = 26,
     SET_TPS43_TUNING = 27,
     SET_TPS43_CURSOR_THRESHOLD = 28,
+    GET_TPS43_CURSOR_FILTER = 29,
+    SET_TPS43_CURSOR_FILTER = 30,
 };
 
 struct usage_def_t {
@@ -335,7 +337,17 @@ struct __attribute__((packed)) persist_config_v22_t {
     uint8_t tps43_tuning[83];
 };
 
-typedef persist_config_v22_t persist_config_t;
+struct __attribute__((packed)) persist_config_v23_t {
+    persist_config_v18_t base;
+    uint8_t tps43_tuning[85];
+};
+
+struct __attribute__((packed)) persist_config_v24_t {
+    persist_config_v18_t base;
+    uint8_t tps43_tuning[91];
+};
+
+typedef persist_config_v24_t persist_config_t;
 
 struct __attribute__((packed)) get_config_t {
     uint8_t version;
@@ -390,6 +402,18 @@ struct __attribute__((packed)) tps43_runtime_tuning_set_t {
     uint16_t subthreshold_cursor_expiry_ms;
 };
 static_assert(sizeof(tps43_runtime_tuning_set_t) == 26);
+
+// Dedicated command payload keeps all cursor-filter controls outside the full SET
+// payload limit. Speed limits use scaled HID counts/s; weights are previous-delta percent.
+struct __attribute__((packed)) tps43_cursor_filter_tuning_t {
+    uint8_t enabled;
+    uint16_t slow_speed_limit_counts_per_second;
+    uint16_t fast_speed_limit_counts_per_second;
+    uint8_t slow_weight_percent;
+    uint8_t normal_weight_percent;
+    uint8_t fast_weight_percent;
+};
+static_assert(sizeof(tps43_cursor_filter_tuning_t) == 8);
 
 struct __attribute__((packed)) get_indexed_t {
     uint32_t requested_index;

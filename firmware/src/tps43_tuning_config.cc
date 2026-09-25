@@ -115,6 +115,12 @@ DualTps43Tuning production_tuning() {
     tuning.left_assisted_drag_axis_threshold = 2;
     tuning.subthreshold_cursor_expiry_us = 50000;
     tuning.subthreshold_cursor_threshold = 2;
+    tuning.cursor_temporal_filter_enabled = true;
+    tuning.cursor_filter_slow_speed_limit_counts_per_second = 500;
+    tuning.cursor_filter_fast_speed_limit_counts_per_second = 2000;
+    tuning.cursor_filter_slow_weight_percent = 20;
+    tuning.cursor_filter_normal_weight_percent = 10;
+    tuning.cursor_filter_fast_weight_percent = 0;
     return tuning;
 }
 
@@ -132,6 +138,13 @@ bool validate_tps43_tuning(const DualTps43Tuning& tuning) {
            tuning.neutral_activation_threshold >= 0 && tuning.left_assisted_drag_axis_threshold > 0 &&
            tuning.subthreshold_cursor_expiry_us >= 1000 && tuning.subthreshold_cursor_expiry_us <= 65535000 &&
            tuning.subthreshold_cursor_threshold >= 1 && tuning.subthreshold_cursor_threshold <= 255 &&
+           tuning.cursor_filter_slow_speed_limit_counts_per_second > 0 &&
+           tuning.cursor_filter_slow_speed_limit_counts_per_second <
+               tuning.cursor_filter_fast_speed_limit_counts_per_second &&
+           tuning.cursor_filter_fast_speed_limit_counts_per_second <= 10000 &&
+           tuning.cursor_filter_slow_weight_percent <= 100 &&
+           tuning.cursor_filter_normal_weight_percent <= 100 &&
+           tuning.cursor_filter_fast_weight_percent <= 100 &&
            validate_velocity_gain(tuning.cursor_gain) && validate_velocity_gain(tuning.scroll_gain) &&
            validate_momentum(tuning.scroll_momentum);
 }
@@ -168,6 +181,14 @@ bool encode_tps43_tuning(const DualTps43Tuning& tuning, uint8_t* buffer, std::si
     write_u32(cursor, tuning.subthreshold_cursor_expiry_us);
     cursor += 4;
     *cursor++ = tuning.subthreshold_cursor_threshold;
+    *cursor++ = tuning.cursor_temporal_filter_enabled ? 1 : 0;
+    *cursor++ = tuning.cursor_filter_slow_weight_percent;
+    write_u16(cursor, tuning.cursor_filter_slow_speed_limit_counts_per_second);
+    cursor += 2;
+    write_u16(cursor, tuning.cursor_filter_fast_speed_limit_counts_per_second);
+    cursor += 2;
+    *cursor++ = tuning.cursor_filter_normal_weight_percent;
+    *cursor++ = tuning.cursor_filter_fast_weight_percent;
     return static_cast<std::size_t>(cursor - buffer) == kTps43TuningBlockSize;
 }
 
@@ -183,14 +204,18 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
                            buffer_size >= kTps43TuningBlockV1Size;
     const bool legacy_v2 = block_version == 2 && block_size == kTps43TuningBlockV2Size &&
                            buffer_size >= kTps43TuningBlockV2Size;
-    const bool current_v3 = block_version == kTps43TuningBlockVersion && block_size == kTps43TuningBlockSize &&
+    const bool legacy_v3 = block_version == 3 && block_size == kTps43TuningBlockV3Size &&
+                           buffer_size >= kTps43TuningBlockV3Size;
+    const bool legacy_v4 = block_version == 4 && block_size == kTps43TuningBlockV4Size &&
+                           buffer_size >= kTps43TuningBlockV4Size;
+    const bool current_v5 = block_version == kTps43TuningBlockVersion && block_size == kTps43TuningBlockSize &&
                             buffer_size >= kTps43TuningBlockSize;
-    if (!legacy_v1 && !legacy_v2 && !current_v3) {
+    if (!legacy_v1 && !legacy_v2 && !legacy_v3 && !legacy_v4 && !current_v5) {
         return false;
     }
 
     const uint8_t* cursor = buffer + kHeaderSize;
-    DualTps43Tuning decoded;
+    DualTps43Tuning decoded = production_tuning();
     decoded.tap_max_duration_us = read_u64(cursor);
     cursor += 8;
     decoded.stationary_intent_threshold_us = read_u64(cursor);
@@ -209,12 +234,34 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
     cursor += 4;
     decoded.left_assisted_drag_axis_threshold = read_i32(cursor);
     cursor += 4;
-    if (legacy_v2 || current_v3) {
+    if (legacy_v2 || legacy_v3 || legacy_v4 || current_v5) {
         decoded.subthreshold_cursor_expiry_us = read_u32(cursor);
         cursor += 4;
     }
-    if (current_v3) {
+    if (legacy_v3 || legacy_v4 || current_v5) {
         decoded.subthreshold_cursor_threshold = *cursor;
+        cursor++;
+    }
+    if (legacy_v4 || current_v5) {
+        if (*cursor > 1) {
+            return false;
+        }
+        decoded.cursor_temporal_filter_enabled = *cursor++ != 0;
+        decoded.cursor_filter_slow_weight_percent = *cursor++;
+        if (current_v5) {
+            decoded.cursor_filter_slow_speed_limit_counts_per_second = read_u16(cursor);
+            cursor += 2;
+            decoded.cursor_filter_fast_speed_limit_counts_per_second = read_u16(cursor);
+            cursor += 2;
+            decoded.cursor_filter_normal_weight_percent = *cursor++;
+            decoded.cursor_filter_fast_weight_percent = *cursor;
+        } else {
+            // v4 used the slow-band weight for all speeds up to 300 counts/s,
+            // halved it in its normal band, and bypassed the fast band.
+            decoded.cursor_filter_normal_weight_percent =
+                decoded.cursor_filter_slow_weight_percent / 2;
+            decoded.cursor_filter_fast_weight_percent = 0;
+        }
     }
 
     if (!validate_tps43_tuning(decoded)) {
@@ -269,6 +316,42 @@ bool set_configured_tps43_runtime_tuning(const tps43_runtime_tuning_set_t& contr
 bool set_configured_tps43_cursor_threshold(uint8_t threshold) {
     DualTps43Tuning candidate = configured_tps43_tuning();
     candidate.subthreshold_cursor_threshold = threshold;
+    if (!validate_tps43_tuning(candidate)) {
+        return false;
+    }
+
+    set_configured_tps43_tuning(candidate);
+    return true;
+}
+
+bool get_configured_tps43_cursor_filter(tps43_cursor_filter_tuning_t* controls) {
+    if (controls == nullptr) {
+        return false;
+    }
+
+    const DualTps43Tuning tuning = configured_tps43_tuning();
+    controls->enabled = tuning.cursor_temporal_filter_enabled ? 1 : 0;
+    controls->slow_speed_limit_counts_per_second = tuning.cursor_filter_slow_speed_limit_counts_per_second;
+    controls->fast_speed_limit_counts_per_second = tuning.cursor_filter_fast_speed_limit_counts_per_second;
+    controls->slow_weight_percent = tuning.cursor_filter_slow_weight_percent;
+    controls->normal_weight_percent = tuning.cursor_filter_normal_weight_percent;
+    controls->fast_weight_percent = tuning.cursor_filter_fast_weight_percent;
+    return true;
+}
+
+bool set_configured_tps43_cursor_filter(const tps43_cursor_filter_tuning_t& controls) {
+    if (controls.enabled > 1 || controls.slow_weight_percent > 100 ||
+        controls.normal_weight_percent > 100 || controls.fast_weight_percent > 100) {
+        return false;
+    }
+
+    DualTps43Tuning candidate = configured_tps43_tuning();
+    candidate.cursor_temporal_filter_enabled = controls.enabled != 0;
+    candidate.cursor_filter_slow_speed_limit_counts_per_second = controls.slow_speed_limit_counts_per_second;
+    candidate.cursor_filter_fast_speed_limit_counts_per_second = controls.fast_speed_limit_counts_per_second;
+    candidate.cursor_filter_slow_weight_percent = controls.slow_weight_percent;
+    candidate.cursor_filter_normal_weight_percent = controls.normal_weight_percent;
+    candidate.cursor_filter_fast_weight_percent = controls.fast_weight_percent;
     if (!validate_tps43_tuning(candidate)) {
         return false;
     }

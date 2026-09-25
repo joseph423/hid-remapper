@@ -99,6 +99,13 @@ struct DualTps43Tuning {
     uint32_t subthreshold_cursor_expiry_us = 50000;
     // Per-axis accumulated magnitude required to emit unclassified cursor input.
     uint8_t subthreshold_cursor_threshold = 2;
+    // Applies an adaptive temporal EMA only to cursor deltas after the existing base scale.
+    bool cursor_temporal_filter_enabled = false;
+    uint16_t cursor_filter_slow_speed_limit_counts_per_second = 500;
+    uint16_t cursor_filter_fast_speed_limit_counts_per_second = 2000;
+    uint8_t cursor_filter_slow_weight_percent = 20;
+    uint8_t cursor_filter_normal_weight_percent = 10;
+    uint8_t cursor_filter_fast_weight_percent = 0;
 };
 
 // Interface between normalized dual-pad input and logical actions.
@@ -206,6 +213,7 @@ class DualTps43Fsm : public DualPadProcessor {
     void add_right_cursor(const PadState& right, LogicalActions& actions);
     void add_left_scroll(const PadState& left, LogicalActions& actions);
     void add_right_scroll(const PadState& right, LogicalActions& actions);
+    void reset_cursor_temporal_filter();
 
     // Velocity-gain and scroll-momentum helpers.
     void apply_motion(const DualPadSnapshot& snapshot, LogicalActions& actions);
@@ -246,6 +254,8 @@ class DualTps43Fsm : public DualPadProcessor {
     int64_t pending_cursor_x_ = 0;
     int64_t pending_cursor_y_ = 0;
     uint64_t pending_cursor_since_us_ = 0;
+    int64_t filtered_cursor_x_q8_ = 0;
+    int64_t filtered_cursor_y_q8_ = 0;
     ScrollMotionState scroll_motion_;
     ScrollSource scroll_source_this_cycle_ = ScrollSource::None;
 };

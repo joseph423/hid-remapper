@@ -36,7 +36,7 @@ If you can't use the browser-based configuration tool, there's also a [command-l
 
 ### Project-local TPS43 configuration tool
 
-The dual-TPS43 firmware in this project uses the project-specific configuration version 22 and TPS43 tuning commands. Use the local tool in this repository; the official online tool does not support these commands.
+The dual-TPS43 firmware in this project uses project-specific configuration version 24 and TPS43 tuning commands. Use the local tool in this repository; the official online tool does not support these commands. The TPS43 tuning panel exposes the adaptive cursor-filter toggle, two speed cutoffs (default 500 and 2,000 scaled HID counts/s), and separate previous-output weights for slow/normal/fast movement (defaults 20%/10%/0%, each adjustable from 0–100%).
 
 From the repository root, start a local web server:
 
