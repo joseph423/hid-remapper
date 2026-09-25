@@ -22,7 +22,8 @@ void Tps43RemapperActionSink::apply(const LogicalActions& actions) {
     const int64_t cursor_x_q8 = q8_or_integer(actions.cursor_x_q8, actions.cursor_x);
     const int64_t cursor_y_q8 = q8_or_integer(actions.cursor_y_q8, actions.cursor_y);
     const int64_t scroll_x_q8 = q8_or_integer(actions.scroll_x_q8, actions.scroll_x);
-    const int64_t scroll_y_q8 = q8_or_integer(actions.scroll_y_q8, actions.scroll_y);
+    // Flip only TPS43 vertical wheel direction at its HID boundary; leave horizontal pan and cursor coordinates unchanged.
+    const int64_t scroll_y_q8 = -q8_or_integer(actions.scroll_y_q8, actions.scroll_y);
     if (actions.right_touch_started) {
         digitizer_x_ = 16384;
         digitizer_y_ = 16384;
