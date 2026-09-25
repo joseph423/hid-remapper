@@ -37,6 +37,8 @@ enum class ConfigCommand : int8_t {
     SET_TPS43_CURSOR_THRESHOLD = 28,
     GET_TPS43_CURSOR_FILTER = 29,
     SET_TPS43_CURSOR_FILTER = 30,
+    GET_TPS43_SCROLL_GAIN = 31,
+    SET_TPS43_SCROLL_GAIN = 32,
 };
 
 struct usage_def_t {
@@ -347,7 +349,12 @@ struct __attribute__((packed)) persist_config_v24_t {
     uint8_t tps43_tuning[91];
 };
 
-typedef persist_config_v24_t persist_config_t;
+struct __attribute__((packed)) persist_config_v25_t {
+    persist_config_v18_t base;
+    uint8_t tps43_tuning[100];
+};
+
+typedef persist_config_v25_t persist_config_t;
 
 struct __attribute__((packed)) get_config_t {
     uint8_t version;
@@ -414,6 +421,16 @@ struct __attribute__((packed)) tps43_cursor_filter_tuning_t {
     uint8_t fast_weight_percent;
 };
 static_assert(sizeof(tps43_cursor_filter_tuning_t) == 8);
+
+// Optional active-scroll speed curve; speed is in normalized pad counts/s.
+struct __attribute__((packed)) tps43_scroll_gain_tuning_t {
+    uint8_t enabled;
+    uint16_t slow_speed_limit_counts_per_second;
+    uint16_t fast_speed_limit_counts_per_second;
+    uint16_t slow_gain_percent;
+    uint16_t fast_gain_percent;
+};
+static_assert(sizeof(tps43_scroll_gain_tuning_t) == 9);
 
 struct __attribute__((packed)) get_indexed_t {
     uint32_t requested_index;

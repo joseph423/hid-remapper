@@ -193,6 +193,66 @@
                         <input type="number" min="0" id="tps43_scroll_base_scale_input" class="form-control text-end" style="max-width: 100px;">
                     </div>
                 </div>
+                <div class="row mt-3 align-items-center">
+                    <div class="col-4 text-end">
+                        <label for="tps43_active_scroll_speed_gain_enabled" class="col-form-label">Active scroll speed gain</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="tps43_active_scroll_speed_gain_enabled">
+                            <label class="form-check-label" for="tps43_active_scroll_speed_gain_enabled">Enabled for A/B test</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3 align-items-center">
+                    <div class="col-4 text-end">
+                        <label for="tps43_active_scroll_slow_speed_limit" class="col-form-label">Slow-speed limit</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="1" max="9999" step="1" id="tps43_active_scroll_slow_speed_limit" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">raw counts/s</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3 align-items-center">
+                    <div class="col-4 text-end">
+                        <label for="tps43_active_scroll_slow_gain" class="col-form-label">Slow-speed gain</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="0" max="300" step="1" id="tps43_active_scroll_slow_gain" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">% of base</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3 align-items-center">
+                    <div class="col-4 text-end">
+                        <label for="tps43_active_scroll_fast_speed_limit" class="col-form-label">Fast-speed limit</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="2" max="10000" step="1" id="tps43_active_scroll_fast_speed_limit" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">raw counts/s</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-3 align-items-center">
+                    <div class="col-4 text-end">
+                        <label for="tps43_active_scroll_fast_gain" class="col-form-label">Fast-speed gain</label>
+                    </div>
+                    <div class="col-auto">
+                        <div class="input-group">
+                            <input type="number" min="0" max="300" step="1" id="tps43_active_scroll_fast_gain" class="form-control text-end" style="max-width: 100px;">
+                            <span class="input-group-text">% of base</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="offset-4 col-auto">
+                        <div class="form-text">When enabled, gain is linearly interpolated from each sample's speed between the two limits, then multiplies the base scale. It affects active scroll only, not cursor movement or post-release momentum; no speed filter or delay is added. Default A/B values: 200% at or below 200 counts/s, decreasing to 50% at or above 1,000 counts/s. Disabled by default.</div>
+                    </div>
+                </div>
                 <div class="row mt-3">
                     <div class="col-4 text-end">
                         <label for="tps43_cursor_subthreshold_expiry_input" class="col-form-label">Sub-threshold cursor expiry</label>

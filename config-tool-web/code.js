@@ -8,7 +8,7 @@ const STICKY_FLAG = 1 << 0;
 const TAP_FLAG = 1 << 1;
 const HOLD_FLAG = 1 << 2;
 const CONFIG_SIZE = 32;
-const CONFIG_VERSION = 24;
+const CONFIG_VERSION = 25;
 const VENDOR_ID = 0xCAFE;
 const PRODUCT_ID = 0xBAF2;
 const DEFAULT_PARTIAL_SCROLL_TIMEOUT = 1000000;
@@ -31,6 +31,11 @@ const DEFAULT_TPS43_TUNING = {
     'cursor_filter_slow_weight_percent': 20,
     'cursor_filter_normal_weight_percent': 10,
     'cursor_filter_fast_weight_percent': 0,
+    'active_scroll_speed_gain_enabled': false,
+    'active_scroll_slow_speed_limit_counts_per_second': 200,
+    'active_scroll_fast_speed_limit_counts_per_second': 1000,
+    'active_scroll_slow_gain_percent': 200,
+    'active_scroll_fast_gain_percent': 50,
 };
 
 const NLAYERS = 8;
@@ -81,6 +86,8 @@ const SET_TPS43_TUNING = 27;
 const SET_TPS43_CURSOR_THRESHOLD = 28;
 const GET_TPS43_CURSOR_FILTER = 29;
 const SET_TPS43_CURSOR_FILTER = 30;
+const GET_TPS43_SCROLL_GAIN = 31;
+const SET_TPS43_SCROLL_GAIN = 32;
 
 const PERSIST_CONFIG_SUCCESS = 1;
 const PERSIST_CONFIG_CONFIG_TOO_BIG = 2;
@@ -234,6 +241,11 @@ document.addEventListener("DOMContentLoaded", function () {
     document.getElementById("tps43_cursor_filter_slow_weight").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_cursor_filter_normal_weight").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_cursor_filter_fast_weight").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_active_scroll_speed_gain_enabled").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_active_scroll_slow_speed_limit").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_active_scroll_fast_speed_limit").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_active_scroll_slow_gain").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_active_scroll_fast_gain").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("gpio_debounce_time_input").addEventListener("change", gpio_debounce_time_onchange);
     document.getElementById("macro_entry_duration_input").addEventListener("change", macro_entry_duration_onchange);
     for (let i = 0; i < NLAYERS; i++) {
@@ -372,6 +384,19 @@ async function load_from_device() {
         config['tps43_tuning']['cursor_filter_slow_weight_percent'] = cursor_filter_slow_weight_percent;
         config['tps43_tuning']['cursor_filter_normal_weight_percent'] = cursor_filter_normal_weight_percent;
         config['tps43_tuning']['cursor_filter_fast_weight_percent'] = cursor_filter_fast_weight_percent;
+
+        await send_feature_command(GET_TPS43_SCROLL_GAIN);
+        const [active_scroll_speed_gain_enabled, active_scroll_slow_speed_limit_counts_per_second,
+            active_scroll_fast_speed_limit_counts_per_second, active_scroll_slow_gain_percent,
+            active_scroll_fast_gain_percent] =
+            await read_config_feature([UINT8, UINT16, UINT16, UINT16, UINT16]);
+        config['tps43_tuning']['active_scroll_speed_gain_enabled'] = !!active_scroll_speed_gain_enabled;
+        config['tps43_tuning']['active_scroll_slow_speed_limit_counts_per_second'] =
+            active_scroll_slow_speed_limit_counts_per_second;
+        config['tps43_tuning']['active_scroll_fast_speed_limit_counts_per_second'] =
+            active_scroll_fast_speed_limit_counts_per_second;
+        config['tps43_tuning']['active_scroll_slow_gain_percent'] = active_scroll_slow_gain_percent;
+        config['tps43_tuning']['active_scroll_fast_gain_percent'] = active_scroll_fast_gain_percent;
 
         for (let i = 0; i < mapping_count; i++) {
             await send_feature_command(GET_MAPPING, [[UINT32, i]]);
@@ -523,6 +548,17 @@ async function save_to_device() {
                 throw new Error('Each cursor filter band weight must be between 0 and 100%.');
             }
         }
+        const scroll_slow_speed = tps43_tuning['active_scroll_slow_speed_limit_counts_per_second'];
+        const scroll_fast_speed = tps43_tuning['active_scroll_fast_speed_limit_counts_per_second'];
+        if (!Number.isInteger(scroll_slow_speed) || scroll_slow_speed < 1 || scroll_slow_speed >= scroll_fast_speed ||
+            !Number.isInteger(scroll_fast_speed) || scroll_fast_speed > 10000) {
+            throw new Error('Active scroll speed limits must be ordered and within 1–10,000 raw counts/s.');
+        }
+        for (const key of ['active_scroll_slow_gain_percent', 'active_scroll_fast_gain_percent']) {
+            if (!Number.isInteger(tps43_tuning[key]) || tps43_tuning[key] < 0 || tps43_tuning[key] > 300) {
+                throw new Error('Active scroll gain must be between 0 and 300% of the base scale.');
+            }
+        }
         await send_feature_command(SUSPEND);
         const flags = (config['ignore_auth_dev_inputs'] ? IGNORE_AUTH_DEV_INPUTS_FLAG : 0) |
             (config['gpio_output_mode'] ? GPIO_OUTPUT_MODE_FLAG : 0) |
@@ -559,6 +595,13 @@ async function save_to_device() {
             [UINT8, tps43_tuning['cursor_filter_slow_weight_percent']],
             [UINT8, tps43_tuning['cursor_filter_normal_weight_percent']],
             [UINT8, tps43_tuning['cursor_filter_fast_weight_percent']],
+        ]);
+        await send_feature_command(SET_TPS43_SCROLL_GAIN, [
+            [UINT8, tps43_tuning['active_scroll_speed_gain_enabled'] ? 1 : 0],
+            [UINT16, tps43_tuning['active_scroll_slow_speed_limit_counts_per_second']],
+            [UINT16, tps43_tuning['active_scroll_fast_speed_limit_counts_per_second']],
+            [UINT16, tps43_tuning['active_scroll_slow_gain_percent']],
+            [UINT16, tps43_tuning['active_scroll_fast_gain_percent']],
         ]);
         await send_feature_command(CLEAR_MAPPING);
 
@@ -757,6 +800,16 @@ function set_config_ui_state() {
     document.getElementById('tps43_cursor_filter_slow_weight').value = tps43_tuning['cursor_filter_slow_weight_percent'];
     document.getElementById('tps43_cursor_filter_normal_weight').value = tps43_tuning['cursor_filter_normal_weight_percent'];
     document.getElementById('tps43_cursor_filter_fast_weight').value = tps43_tuning['cursor_filter_fast_weight_percent'];
+    document.getElementById('tps43_active_scroll_speed_gain_enabled').checked =
+        tps43_tuning['active_scroll_speed_gain_enabled'];
+    document.getElementById('tps43_active_scroll_slow_speed_limit').value =
+        tps43_tuning['active_scroll_slow_speed_limit_counts_per_second'];
+    document.getElementById('tps43_active_scroll_fast_speed_limit').value =
+        tps43_tuning['active_scroll_fast_speed_limit_counts_per_second'];
+    document.getElementById('tps43_active_scroll_slow_gain').value =
+        tps43_tuning['active_scroll_slow_gain_percent'];
+    document.getElementById('tps43_active_scroll_fast_gain').value =
+        tps43_tuning['active_scroll_fast_gain_percent'];
 }
 
 function set_mappings_ui_state() {
@@ -926,6 +979,13 @@ function set_ui_state() {
     if (config['tps43_tuning']['cursor_filter_fast_weight_percent'] === undefined) {
         config['tps43_tuning']['cursor_filter_fast_weight_percent'] =
             DEFAULT_TPS43_TUNING['cursor_filter_fast_weight_percent'];
+    }
+    for (const key of ['active_scroll_speed_gain_enabled', 'active_scroll_slow_speed_limit_counts_per_second',
+        'active_scroll_fast_speed_limit_counts_per_second', 'active_scroll_slow_gain_percent',
+        'active_scroll_fast_gain_percent']) {
+        if (config['tps43_tuning'][key] === undefined) {
+            config['tps43_tuning'][key] = DEFAULT_TPS43_TUNING[key];
+        }
     }
     delete config['tps43_tuning']['cursor_temporal_filter_previous_weight_percent'];
     if (config['version'] < CONFIG_VERSION) {
@@ -1568,6 +1628,10 @@ function tps43_tuning_onchange() {
         ['cursor_filter_slow_weight_percent', 'tps43_cursor_filter_slow_weight', 0, 100],
         ['cursor_filter_normal_weight_percent', 'tps43_cursor_filter_normal_weight', 0, 100],
         ['cursor_filter_fast_weight_percent', 'tps43_cursor_filter_fast_weight', 0, 100],
+        ['active_scroll_slow_speed_limit_counts_per_second', 'tps43_active_scroll_slow_speed_limit', 1, 9999],
+        ['active_scroll_fast_speed_limit_counts_per_second', 'tps43_active_scroll_fast_speed_limit', 2, 10000],
+        ['active_scroll_slow_gain_percent', 'tps43_active_scroll_slow_gain', 0, 300],
+        ['active_scroll_fast_gain_percent', 'tps43_active_scroll_fast_gain', 0, 300],
     ];
     for (const [key, element_id, minimum, maximum] of fields) {
         let value = parseInt(document.getElementById(element_id).value, 10);
@@ -1579,6 +1643,8 @@ function tps43_tuning_onchange() {
     }
     config['tps43_tuning']['cursor_temporal_filter_enabled'] =
         document.getElementById('tps43_cursor_temporal_filter_enabled').checked;
+    config['tps43_tuning']['active_scroll_speed_gain_enabled'] =
+        document.getElementById('tps43_active_scroll_speed_gain_enabled').checked;
 }
 
 function gpio_debounce_time_onchange() {

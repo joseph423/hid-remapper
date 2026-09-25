@@ -28,6 +28,13 @@ void assert_equal(const DualTps43Tuning& expected, const DualTps43Tuning& actual
     assert(expected.cursor_filter_slow_weight_percent == actual.cursor_filter_slow_weight_percent);
     assert(expected.cursor_filter_normal_weight_percent == actual.cursor_filter_normal_weight_percent);
     assert(expected.cursor_filter_fast_weight_percent == actual.cursor_filter_fast_weight_percent);
+    assert(expected.active_scroll_gain.enabled == actual.active_scroll_gain.enabled);
+    assert(expected.active_scroll_gain.slow_speed_limit_counts_per_second ==
+           actual.active_scroll_gain.slow_speed_limit_counts_per_second);
+    assert(expected.active_scroll_gain.fast_speed_limit_counts_per_second ==
+           actual.active_scroll_gain.fast_speed_limit_counts_per_second);
+    assert(expected.active_scroll_gain.slow_gain_percent == actual.active_scroll_gain.slow_gain_percent);
+    assert(expected.active_scroll_gain.fast_gain_percent == actual.active_scroll_gain.fast_gain_percent);
 }
 
 }  // namespace
@@ -42,6 +49,11 @@ int main() {
     assert(defaults.cursor_filter_slow_weight_percent == 20);
     assert(defaults.cursor_filter_normal_weight_percent == 10);
     assert(defaults.cursor_filter_fast_weight_percent == 0);
+    assert(!defaults.active_scroll_gain.enabled);
+    assert(defaults.active_scroll_gain.slow_speed_limit_counts_per_second == 200);
+    assert(defaults.active_scroll_gain.fast_speed_limit_counts_per_second == 1000);
+    assert(defaults.active_scroll_gain.slow_gain_percent == 200);
+    assert(defaults.active_scroll_gain.fast_gain_percent == 50);
     assert_equal(defaults, configured_tps43_tuning());
 
     DualTps43Tuning configured = defaults;
@@ -60,6 +72,13 @@ int main() {
     DualTps43Tuning decoded = {};
     assert(decode_tps43_tuning(buffer, sizeof(buffer), &decoded));
     assert_equal(defaults, decoded);
+
+    DualTps43Tuning scroll_gain_config = defaults;
+    scroll_gain_config.active_scroll_gain = { true, 300, 1500, 250, 40 };
+    uint8_t scroll_gain_block[kTps43TuningBlockSize] = {};
+    assert(encode_tps43_tuning(scroll_gain_config, scroll_gain_block, sizeof(scroll_gain_block)));
+    assert(decode_tps43_tuning(scroll_gain_block, sizeof(scroll_gain_block), &decoded));
+    assert_equal(scroll_gain_config, decoded);
 
     // Older blocks stored min/max velocity gains in these slots. Retain the
     // first value as the fixed scale and ignore the retired fields.
@@ -123,8 +142,21 @@ int main() {
     assert(decoded.cursor_filter_slow_weight_percent == 50);
     assert(decoded.cursor_filter_normal_weight_percent == 25);
     assert(decoded.cursor_filter_fast_weight_percent == 0);
+    assert(!decoded.active_scroll_gain.enabled);
+    assert(decoded.active_scroll_gain.slow_gain_percent == 200);
     assert(decoded.cursor_filter_slow_speed_limit_counts_per_second == 500);
     assert(decoded.cursor_filter_fast_speed_limit_counts_per_second == 2000);
+
+    uint8_t legacy_v5[kTps43TuningBlockV5Size] = {};
+    for (std::size_t i = 0; i < sizeof(legacy_v5); i++) {
+        legacy_v5[i] = buffer[i];
+    }
+    legacy_v5[4] = 5;
+    legacy_v5[6] = static_cast<uint8_t>(kTps43TuningBlockV5Size);
+    legacy_v5[7] = static_cast<uint8_t>(kTps43TuningBlockV5Size >> 8);
+    assert(decode_tps43_tuning(legacy_v5, sizeof(legacy_v5), &decoded));
+    assert(!decoded.active_scroll_gain.enabled);
+    assert(decoded.active_scroll_gain.slow_gain_percent == 200);
 
     uint8_t legacy_v2[kTps43TuningBlockV2Size] = {};
     for (std::size_t i = 0; i < sizeof(legacy_v2); i++) {
@@ -204,7 +236,32 @@ int main() {
     assert(updated.subthreshold_cursor_threshold == 4);
     assert(updated.scroll_momentum.release_velocity_filter_weight_q8 == 0);
 
-    const DualTps43Tuning before_invalid = updated;
+    tps43_scroll_gain_tuning_t scroll_gain = {};
+    assert(get_configured_tps43_scroll_gain(&scroll_gain));
+    assert(scroll_gain.enabled == 0);
+    assert(scroll_gain.slow_speed_limit_counts_per_second == 200);
+    scroll_gain.enabled = 1;
+    scroll_gain.slow_speed_limit_counts_per_second = 300;
+    scroll_gain.fast_speed_limit_counts_per_second = 1500;
+    scroll_gain.slow_gain_percent = 250;
+    scroll_gain.fast_gain_percent = 40;
+    assert(set_configured_tps43_scroll_gain(scroll_gain));
+    tps43_scroll_gain_tuning_t saved_scroll_gain = {};
+    assert(get_configured_tps43_scroll_gain(&saved_scroll_gain));
+    assert(saved_scroll_gain.enabled == 1);
+    assert(saved_scroll_gain.slow_speed_limit_counts_per_second == 300);
+    assert(saved_scroll_gain.fast_speed_limit_counts_per_second == 1500);
+    assert(saved_scroll_gain.slow_gain_percent == 250);
+    assert(saved_scroll_gain.fast_gain_percent == 40);
+    const DualTps43Tuning updated_scroll_gain = configured_tps43_tuning();
+    assert(updated_scroll_gain.active_scroll_gain.enabled);
+    assert(updated_scroll_gain.active_scroll_gain.slow_gain_percent == 250);
+    assert(updated_scroll_gain.active_scroll_gain.fast_gain_percent == 40);
+    assert(!set_configured_tps43_scroll_gain({ 1, 1500, 300, 100, 100 }));
+    assert(!set_configured_tps43_scroll_gain({ 2, 100, 200, 100, 100 }));
+    assert(!set_configured_tps43_scroll_gain({ 1, 100, 200, 301, 100 }));
+
+    const DualTps43Tuning before_invalid = configured_tps43_tuning();
     controls.stationary_intent_threshold_ms = controls.tap_max_duration_ms;
     assert(!set_configured_tps43_runtime_tuning(controls));
     assert_equal(before_invalid, configured_tps43_tuning());

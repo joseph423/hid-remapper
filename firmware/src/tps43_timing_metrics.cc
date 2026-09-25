@@ -246,7 +246,7 @@ void tps43_normal_capture_note_sample(uint64_t now_us, const Tps43Sample& sample
             add_interval(normal.movement, sample.timestamp_us);
         }
     }
-    if (sample.finger_count == 2 && sample.scroll_gesture && sample.movement_reported) {
+    if (sample.finger_count == 2 && sample.scroll_gesture) {
         ++normal.raw_scroll_samples;
         normal.raw_scroll_x += sample.relative_x;
         normal.raw_scroll_y += sample.relative_y;

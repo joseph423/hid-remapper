@@ -335,6 +335,110 @@ int main() {
             "fixed active scroll scale must not create cursor output");
     });
 
+    run_case("MOTION-22 left-scroll-retains-pending-and-unclassified-deltas", [] {
+        Harness harness;
+        Tps43Sample pending = one_finger(0, 2);
+        pending.movement_reported = false;
+        const LogicalActions before_activation = harness.step(pending, inactive(), 10000);
+        require(before_activation.scroll_y_q8 == 0,
+            "Left motion must remain buffered until the existing scroll-intent status activates");
+
+        const LogicalActions activation = harness.step(one_finger(0, 1), inactive(), 10000);
+        require(activation.scroll_y_q8 == 768 && activation.scroll_y == 3,
+            "Left-scroll activation must flush prior deltas together with the triggering delta");
+
+        Tps43Sample unclassified = one_finger(0, 1);
+        unclassified.movement_reported = false;
+        const LogicalActions continuation = harness.step(unclassified, inactive(), 10000);
+        require(continuation.scroll_y_q8 == 256 && continuation.scroll_y == 1,
+            "active Left-scroll must forward later deltas even when movement status is clear");
+    });
+
+    run_case("MOTION-23 left-scroll-pending-deltas-are-discarded-on-lift", [] {
+        Harness harness;
+        Tps43Sample pending = one_finger(0, 2);
+        pending.movement_reported = false;
+        require(harness.step(pending, inactive(), 10000).scroll_y_q8 == 0,
+            "unconfirmed Left-scroll movement must stay pending");
+        require(harness.step(inactive(), inactive(), 10000).scroll_y_q8 == 0,
+            "lifting before scroll activation must discard pending movement");
+        require(harness.step(one_finger(0, 1), inactive(), 10000).scroll_y == 1,
+            "a later touch must not inherit movement from the cancelled session");
+    });
+
+    run_case("MOTION-24 right-scroll-uses-gesture-status-not-movement-status", [] {
+        Harness harness;
+        Tps43Sample recognized_scroll = two_finger(0, 3);
+        recognized_scroll.movement_reported = false;
+        recognized_scroll.scroll_gesture = true;
+        const LogicalActions action = harness.step(inactive(), recognized_scroll, 10000);
+        require(action.scroll_y_q8 == 768 && action.scroll_y == 3,
+            "a recognized Right two-finger scroll must forward its delta with movement status clear");
+
+        Harness unrecognized;
+        Tps43Sample other_two_finger_motion = two_finger(0, 3);
+        other_two_finger_motion.movement_reported = false;
+        other_two_finger_motion.scroll_gesture = false;
+        const LogicalActions suppressed = unrecognized.step(inactive(), other_two_finger_motion, 10000);
+        require(suppressed.scroll_y_q8 == 0,
+            "Right two-finger movement without the sensor scroll gesture must remain suppressed");
+    });
+
+    run_case("MOTION-20 active-scroll-gain-interpolates-by-speed-only", [] {
+        DualTps43Tuning tuning = motion_tuning();
+        tuning.cursor_base_scale_q8 = 256;
+        tuning.scroll_base_scale_q8 = 256;
+        tuning.active_scroll_gain = { true, 200, 1000, 200, 50 };
+
+        Harness slow(tuning);
+        slow.step(inactive(), two_finger(), 10000);
+        const LogicalActions slow_action = slow.step(inactive(), two_finger(0, 1), 10000);
+        require(slow_action.scroll_y_q8 == 512 && slow_action.scroll_y == 2,
+            "slow scroll must use the configured 200% gain below the slow-speed limit");
+
+        Harness middle(tuning);
+        middle.step(inactive(), two_finger(), 10000);
+        const LogicalActions middle_action = middle.step(inactive(), two_finger(0, 6), 10000);
+        require(middle_action.scroll_y_q8 == 1920 && middle_action.scroll_y == 7,
+            "speed between limits must linearly interpolate the gain without buffering");
+
+        Harness fast(tuning);
+        fast.step(inactive(), two_finger(), 10000);
+        const LogicalActions fast_action = fast.step(inactive(), two_finger(0, 10), 10000);
+        require(fast_action.scroll_y_q8 == 1280 && fast_action.scroll_y == 5,
+            "fast scroll must use the configured 50% gain at the fast-speed limit");
+
+        Harness cursor(tuning);
+        cursor.step(inactive(), one_finger(), 10000);
+        const LogicalActions cursor_action = cursor.step(inactive(), one_finger(10, 0), 10000);
+        require(cursor_action.cursor_x_q8 == 2560 && cursor_action.scroll_y_q8 == 0,
+            "active-scroll speed gain must not alter cursor output");
+
+        tuning.active_scroll_gain.enabled = false;
+        Harness disabled(tuning);
+        disabled.step(inactive(), two_finger(), 10000);
+        const LogicalActions disabled_action = disabled.step(inactive(), two_finger(0, 10), 10000);
+        require(disabled_action.scroll_y_q8 == 2560,
+            "disabling the A/B curve must restore fixed base-scale scroll output");
+    });
+
+    run_case("MOTION-21 active-scroll-gain-does-not-change-release-momentum", [] {
+        const auto release_momentum = [](bool enable_gain) {
+            DualTps43Tuning tuning = motion_tuning();
+            tuning.active_scroll_gain = { enable_gain, 200, 1000, 200, 50 };
+            Harness harness(tuning);
+            harness.step(inactive(), two_finger(), 10000);
+            harness.step(inactive(), two_finger(0, 4), 10000);
+            harness.step(inactive(), inactive(), 10000);
+            return harness.step(inactive(), inactive(), 10000);
+        };
+
+        const LogicalActions fixed_scale_momentum = release_momentum(false);
+        const LogicalActions curved_active_momentum = release_momentum(true);
+        require(curved_active_momentum.scroll_y_q8 == fixed_scale_momentum.scroll_y_q8,
+            "the active-scroll curve must not alter the fixed-base post-release momentum signal");
+    });
+
     run_case("MOTION-13 fractional-motion-reaches-output-boundary", [] {
         DualTps43Tuning tuning = motion_tuning();
         tuning.cursor_base_scale_q8 = 128;

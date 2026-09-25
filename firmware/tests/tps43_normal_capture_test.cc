@@ -98,6 +98,21 @@ void test_ring_and_repeat(FILE* output) {
     assert(text.find("normal_sample t_us=87000 dx=87") == std::string::npos);
 }
 
+void test_scroll_capture_counts_unclassified_gesture_deltas(FILE* output) {
+    tps43_normal_capture_start(40000000);
+    Tps43Sample sample;
+    sample.active = true;
+    sample.finger_count = 2;
+    sample.scroll_gesture = true;
+    sample.movement_reported = false;
+    sample.relative_y = -5;
+    sample.timestamp_us = 41000001;
+    tps43_normal_capture_note_sample(sample.timestamp_us, sample, true, 0, 0, 0, 100);
+    finish_dump(56000000);
+    const auto text = read_output(output);
+    assert(text.find("normal_scroll raw_samples=1 raw_dx=0 raw_dy=-5") != std::string::npos);
+}
+
 }  // namespace
 
 // Verifies silent recording, USB failure accounting, intervals and ring retention.
@@ -108,6 +123,7 @@ int main() {
     assert(dup2(fileno(output), fileno(stdout)) >= 0);
     test_capture(output);
     test_ring_and_repeat(output);
+    test_scroll_capture_counts_unclassified_gesture_deltas(output);
     fflush(stdout);
     assert(dup2(original_stdout, fileno(stdout)) >= 0);
     close(original_stdout);

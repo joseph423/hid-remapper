@@ -97,6 +97,7 @@ DualTps43Tuning production_tuning() {
     // Fixed base scales keep cursor and scroll output independent of speed.
     tuning.cursor_base_scale_q8 = 128;
     tuning.scroll_base_scale_q8 = 4;
+    tuning.active_scroll_gain = { false, 200, 1000, 200, 50 };
     tuning.scroll_momentum = { 0, 0, 0, 0 };
     tuning.left_assisted_drag_axis_threshold = 2;
     tuning.subthreshold_cursor_expiry_us = 50000;
@@ -131,6 +132,12 @@ bool validate_tps43_tuning(const DualTps43Tuning& tuning) {
            tuning.cursor_filter_slow_weight_percent <= 100 &&
            tuning.cursor_filter_normal_weight_percent <= 100 &&
            tuning.cursor_filter_fast_weight_percent <= 100 &&
+           tuning.active_scroll_gain.slow_speed_limit_counts_per_second > 0 &&
+           tuning.active_scroll_gain.slow_speed_limit_counts_per_second <
+               tuning.active_scroll_gain.fast_speed_limit_counts_per_second &&
+           tuning.active_scroll_gain.fast_speed_limit_counts_per_second <= 10000 &&
+           tuning.active_scroll_gain.slow_gain_percent <= 300 &&
+           tuning.active_scroll_gain.fast_gain_percent <= 300 &&
            tuning.cursor_base_scale_q8 >= 0 && tuning.scroll_base_scale_q8 >= 0 &&
            validate_momentum(tuning.scroll_momentum);
 }
@@ -175,6 +182,15 @@ bool encode_tps43_tuning(const DualTps43Tuning& tuning, uint8_t* buffer, std::si
     cursor += 2;
     *cursor++ = tuning.cursor_filter_normal_weight_percent;
     *cursor++ = tuning.cursor_filter_fast_weight_percent;
+    *cursor++ = tuning.active_scroll_gain.enabled ? 1 : 0;
+    write_u16(cursor, tuning.active_scroll_gain.slow_speed_limit_counts_per_second);
+    cursor += 2;
+    write_u16(cursor, tuning.active_scroll_gain.fast_speed_limit_counts_per_second);
+    cursor += 2;
+    write_u16(cursor, tuning.active_scroll_gain.slow_gain_percent);
+    cursor += 2;
+    write_u16(cursor, tuning.active_scroll_gain.fast_gain_percent);
+    cursor += 2;
     return static_cast<std::size_t>(cursor - buffer) == kTps43TuningBlockSize;
 }
 
@@ -194,9 +210,11 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
                            buffer_size >= kTps43TuningBlockV3Size;
     const bool legacy_v4 = block_version == 4 && block_size == kTps43TuningBlockV4Size &&
                            buffer_size >= kTps43TuningBlockV4Size;
-    const bool current_v5 = block_version == kTps43TuningBlockVersion && block_size == kTps43TuningBlockSize &&
+    const bool legacy_v5 = block_version == 5 && block_size == kTps43TuningBlockV5Size &&
+                           buffer_size >= kTps43TuningBlockV5Size;
+    const bool current_v6 = block_version == kTps43TuningBlockVersion && block_size == kTps43TuningBlockSize &&
                             buffer_size >= kTps43TuningBlockSize;
-    if (!legacy_v1 && !legacy_v2 && !legacy_v3 && !legacy_v4 && !current_v5) {
+    if (!legacy_v1 && !legacy_v2 && !legacy_v3 && !legacy_v4 && !legacy_v5 && !current_v6) {
         return false;
     }
 
@@ -220,27 +238,27 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
     cursor += 4;
     decoded.left_assisted_drag_axis_threshold = read_i32(cursor);
     cursor += 4;
-    if (legacy_v2 || legacy_v3 || legacy_v4 || current_v5) {
+    if (legacy_v2 || legacy_v3 || legacy_v4 || legacy_v5 || current_v6) {
         decoded.subthreshold_cursor_expiry_us = read_u32(cursor);
         cursor += 4;
     }
-    if (legacy_v3 || legacy_v4 || current_v5) {
+    if (legacy_v3 || legacy_v4 || legacy_v5 || current_v6) {
         decoded.subthreshold_cursor_threshold = *cursor;
         cursor++;
     }
-    if (legacy_v4 || current_v5) {
+    if (legacy_v4 || legacy_v5 || current_v6) {
         if (*cursor > 1) {
             return false;
         }
         decoded.cursor_temporal_filter_enabled = *cursor++ != 0;
         decoded.cursor_filter_slow_weight_percent = *cursor++;
-        if (current_v5) {
+        if (legacy_v5 || current_v6) {
             decoded.cursor_filter_slow_speed_limit_counts_per_second = read_u16(cursor);
             cursor += 2;
             decoded.cursor_filter_fast_speed_limit_counts_per_second = read_u16(cursor);
             cursor += 2;
             decoded.cursor_filter_normal_weight_percent = *cursor++;
-            decoded.cursor_filter_fast_weight_percent = *cursor;
+            decoded.cursor_filter_fast_weight_percent = *cursor++;
         } else {
             // v4 used the slow-band weight for all speeds up to 300 counts/s,
             // halved it in its normal band, and bypassed the fast band.
@@ -248,6 +266,20 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
                 decoded.cursor_filter_slow_weight_percent / 2;
             decoded.cursor_filter_fast_weight_percent = 0;
         }
+    }
+
+    if (current_v6) {
+        if (*cursor > 1) {
+            return false;
+        }
+        decoded.active_scroll_gain.enabled = *cursor++ != 0;
+        decoded.active_scroll_gain.slow_speed_limit_counts_per_second = read_u16(cursor);
+        cursor += 2;
+        decoded.active_scroll_gain.fast_speed_limit_counts_per_second = read_u16(cursor);
+        cursor += 2;
+        decoded.active_scroll_gain.slow_gain_percent = read_u16(cursor);
+        cursor += 2;
+        decoded.active_scroll_gain.fast_gain_percent = read_u16(cursor);
     }
 
     if (!validate_tps43_tuning(decoded)) {
@@ -336,6 +368,42 @@ bool set_configured_tps43_cursor_filter(const tps43_cursor_filter_tuning_t& cont
     candidate.cursor_filter_slow_weight_percent = controls.slow_weight_percent;
     candidate.cursor_filter_normal_weight_percent = controls.normal_weight_percent;
     candidate.cursor_filter_fast_weight_percent = controls.fast_weight_percent;
+    if (!validate_tps43_tuning(candidate)) {
+        return false;
+    }
+
+    set_configured_tps43_tuning(candidate);
+    return true;
+}
+
+bool get_configured_tps43_scroll_gain(tps43_scroll_gain_tuning_t* controls) {
+    if (controls == nullptr) {
+        return false;
+    }
+
+    const DualTps43Tuning configured = configured_tps43_tuning();
+    const ActiveScrollGainTuning& tuning = configured.active_scroll_gain;
+    controls->enabled = tuning.enabled ? 1 : 0;
+    controls->slow_speed_limit_counts_per_second = tuning.slow_speed_limit_counts_per_second;
+    controls->fast_speed_limit_counts_per_second = tuning.fast_speed_limit_counts_per_second;
+    controls->slow_gain_percent = tuning.slow_gain_percent;
+    controls->fast_gain_percent = tuning.fast_gain_percent;
+    return true;
+}
+
+bool set_configured_tps43_scroll_gain(const tps43_scroll_gain_tuning_t& controls) {
+    if (controls.enabled > 1) {
+        return false;
+    }
+
+    DualTps43Tuning candidate = configured_tps43_tuning();
+    candidate.active_scroll_gain.enabled = controls.enabled != 0;
+    candidate.active_scroll_gain.slow_speed_limit_counts_per_second =
+        controls.slow_speed_limit_counts_per_second;
+    candidate.active_scroll_gain.fast_speed_limit_counts_per_second =
+        controls.fast_speed_limit_counts_per_second;
+    candidate.active_scroll_gain.slow_gain_percent = controls.slow_gain_percent;
+    candidate.active_scroll_gain.fast_gain_percent = controls.fast_gain_percent;
     if (!validate_tps43_tuning(candidate)) {
         return false;
     }

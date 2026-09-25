@@ -52,12 +52,18 @@ void DualTps43Fsm::reset() {
     pending_cursor_x_ = 0;
     pending_cursor_y_ = 0;
     pending_cursor_since_us_ = 0;
+    clear_pending_left_scroll();
+    scroll_sample_interval_override_us_ = 0;
     scroll_motion_ = {};
     scroll_source_this_cycle_ = ScrollSource::None;
 }
 
 LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
     scroll_source_this_cycle_ = ScrollSource::None;
+    scroll_sample_interval_override_us_ = 0;
+    if (snapshot.left.touch_started) {
+        clear_pending_left_scroll();
+    }
     if (snapshot.right.touch_started) {
         reset_cursor_temporal_filter();
     }
@@ -117,6 +123,9 @@ LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
     }
 
     apply_motion(snapshot, actions);
+    if (snapshot.left.touch_ended) {
+        clear_pending_left_scroll();
+    }
     actions.right_touch_active = snapshot.right.active;
     actions.right_touch_started = snapshot.right.touch_started;
     actions.right_touch_ended = snapshot.right.touch_ended;
@@ -317,6 +326,7 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
     // The order below is intentional: same-cycle neutral entry, ordered
     // cross-pad taps, mode-entry gestures, and finally ordinary one-pad output.
     if (snapshot.left.touch_started && snapshot.right.touch_started) {
+        clear_pending_left_scroll();
         mode_ = Mode::NeutralDualTouch;
         consume_left_session(snapshot.left);
         consume_right_session(snapshot.right);
@@ -345,6 +355,7 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
         snapshot.right, right_session_, snapshot.right.two_finger_tap, right_session_consumed(snapshot.right));
 
     if (left_tap && previous_right_active_) {
+        clear_pending_left_scroll();
         consume_left_session(snapshot.left);
         consume_right_session(snapshot.right);
         if (right_was_stationary && left_session_.preceding_other_session_id == snapshot.right.session_id) {
@@ -356,6 +367,7 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
     }
 
     if (right_tap && previous_left_active_) {
+        clear_pending_left_scroll();
         consume_left_session(snapshot.left);
         consume_right_session(snapshot.right);
         if (left_was_stationary && right_session_.preceding_other_session_id == snapshot.left.session_id) {
@@ -368,6 +380,27 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
 
     const bool left_stationary_now = is_stationary(snapshot.left, left_session_, snapshot.cycle_timestamp_us);
 
+    // Keep deltas gathered before the existing Left-scroll intent threshold.
+    // A later movement-status sample confirms intent; without that confirmation
+    // the buffer is discarded at lift or when another gesture takes priority.
+    if (snapshot.left.active && snapshot.left.fresh_sample && !snapshot.left.movement_reported &&
+        (pending_left_scroll_x_ != 0 || pending_left_scroll_y_ != 0 ||
+            snapshot.left.relative_x != 0 || snapshot.left.relative_y != 0)) {
+        pending_left_scroll_x_ = saturate_int32(
+            static_cast<int64_t>(pending_left_scroll_x_) + snapshot.left.relative_x);
+        pending_left_scroll_y_ = saturate_int32(
+            static_cast<int64_t>(pending_left_scroll_y_) + snapshot.left.relative_y);
+        const uint64_t interval = snapshot.left.sample_interval_us != 0
+                                      ? snapshot.left.sample_interval_us
+                                      : kFallbackMotionSampleIntervalUs;
+        pending_left_scroll_interval_us_ = static_cast<uint32_t>(std::min<uint64_t>(
+            std::numeric_limits<uint32_t>::max(),
+            static_cast<uint64_t>(pending_left_scroll_interval_us_) + interval));
+        if (pending_left_scroll_x_ == 0 && pending_left_scroll_y_ == 0) {
+            pending_left_scroll_interval_us_ = 0;
+        }
+    }
+
     if (snapshot.left.movement_reported) {
         mode_ = Mode::LeftScroll;
         // Enter with the same eligibility rules as ongoing Left-scroll: a held
@@ -378,6 +411,7 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
 
     if ((left_was_stationary || left_stationary_now) && snapshot.right.active && snapshot.right.finger_count == 1 &&
         right_drag_movement_qualified) {
+        clear_pending_left_scroll();
         mode_ = Mode::LeftAssistedDrag;
         consume_left_session(snapshot.left);
         consume_right_session(snapshot.right);
@@ -391,6 +425,7 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
 
     if (snapshot.right.active && snapshot.right.finger_count == 3 && snapshot.right.movement_reported &&
         (!snapshot.left.active || left_was_stationary || left_stationary_now)) {
+        clear_pending_left_scroll();
         mode_ = Mode::RightLatchedDrag;
         consume_right_session(snapshot.right);
         if (snapshot.left.active) {
@@ -412,19 +447,22 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
         // either lifts quickly or remains long enough to enter Drag.
         consume_left_session(snapshot.left);
         consume_right_session(snapshot.right);
+        clear_pending_left_scroll();
     }
 
     LogicalActions actions;
     if (snapshot.right.active && snapshot.right.finger_count == 1 && has_cursor_input(snapshot.right)) {
         add_right_cursor(snapshot.right, actions);
-    } else if (snapshot.right.active && snapshot.right.finger_count == 2 && snapshot.right.movement_reported &&
-               snapshot.right.scroll_gesture && (!snapshot.left.active || left_was_stationary || left_stationary_now)) {
+    } else if (snapshot.right.active && snapshot.right.finger_count == 2 && snapshot.right.scroll_gesture &&
+               (!snapshot.left.active || left_was_stationary || left_stationary_now)) {
+        clear_pending_left_scroll();
         add_right_scroll(snapshot.right, actions);
         consume_right_session(snapshot.right);
     }
 
     if (right_two_finger_tap &&
         (!snapshot.left.active || left_was_stationary || left_stationary_now)) {
+        clear_pending_left_scroll();
         consume_right_session(snapshot.right);
         actions.right_button = ButtonAction::Click;
     } else if (right_tap && !snapshot.left.active) {
@@ -472,9 +510,18 @@ void DualTps43Fsm::add_right_cursor(const PadState& right, LogicalActions& actio
 }
 
 void DualTps43Fsm::add_left_scroll(const PadState& left, LogicalActions& actions) {
-    actions.scroll_x += left.relative_x;
-    actions.scroll_y += left.relative_y;
-    if (left.movement_reported) {
+    actions.scroll_x = saturate_int32(
+        static_cast<int64_t>(pending_left_scroll_x_) + left.relative_x);
+    actions.scroll_y = saturate_int32(
+        static_cast<int64_t>(pending_left_scroll_y_) + left.relative_y);
+    const uint64_t current_interval = left.sample_interval_us != 0
+                                          ? left.sample_interval_us
+                                          : kFallbackMotionSampleIntervalUs;
+    scroll_sample_interval_override_us_ = static_cast<uint32_t>(std::min<uint64_t>(
+        std::numeric_limits<uint32_t>::max(),
+        static_cast<uint64_t>(pending_left_scroll_interval_us_) + current_interval));
+    clear_pending_left_scroll();
+    if (left.fresh_sample) {
         scroll_source_this_cycle_ = ScrollSource::Left;
     }
 }
@@ -482,9 +529,15 @@ void DualTps43Fsm::add_left_scroll(const PadState& left, LogicalActions& actions
 void DualTps43Fsm::add_right_scroll(const PadState& right, LogicalActions& actions) {
     actions.scroll_x += right.relative_x;
     actions.scroll_y += right.relative_y;
-    if (right.movement_reported) {
+    if (right.fresh_sample) {
         scroll_source_this_cycle_ = ScrollSource::Right;
     }
+}
+
+void DualTps43Fsm::clear_pending_left_scroll() {
+    pending_left_scroll_x_ = 0;
+    pending_left_scroll_y_ = 0;
+    pending_left_scroll_interval_us_ = 0;
 }
 
 void DualTps43Fsm::reset_cursor_temporal_filter() {
@@ -504,7 +557,7 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
     if (actions.cursor_x != 0 || actions.cursor_y != 0) {
         const ScaledDelta cursor = scale_active_delta(
             actions.cursor_x, actions.cursor_y, snapshot.right.sample_interval_us,
-            tuning_.cursor_base_scale_q8, cursor_motion_);
+            tuning_.cursor_base_scale_q8, cursor_motion_, 100);
         actions.cursor_x = cursor.x;
         actions.cursor_y = cursor.y;
         actions.cursor_x_q8 = cursor.x_q8;
@@ -565,6 +618,7 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
     if (scroll_source_this_cycle_ != ScrollSource::None) {
         if (scroll_motion_.source != scroll_source_this_cycle_) {
             scroll_motion_.active_scale = {};
+            scroll_motion_.gain_scale = {};
             scroll_motion_.filtered_velocity_x_q8_per_second = 0;
             scroll_motion_.filtered_velocity_y_q8_per_second = 0;
         }
@@ -572,14 +626,24 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
         scroll_motion_.source = scroll_source_this_cycle_;
         stop_scroll_momentum();
         const PadState& source = scroll_source_this_cycle_ == ScrollSource::Left ? snapshot.left : snapshot.right;
-        const ScaledDelta scroll = scale_active_delta(
-            actions.scroll_x, actions.scroll_y, source.sample_interval_us,
-            tuning_.scroll_base_scale_q8, scroll_motion_.active_scale);
+        const uint64_t sample_interval_us = scroll_sample_interval_override_us_ != 0
+                                                ? scroll_sample_interval_override_us_
+                                                : source.sample_interval_us;
+        const uint16_t gain_percent = active_scroll_gain_percent(
+            actions.scroll_x, actions.scroll_y, sample_interval_us);
+        const ScaledDelta base_scroll = scale_active_delta(
+            actions.scroll_x, actions.scroll_y, sample_interval_us,
+            tuning_.scroll_base_scale_q8, scroll_motion_.active_scale, 100);
+        const ScaledDelta scroll = tuning_.active_scroll_gain.enabled
+                                       ? scale_active_delta(
+                                             actions.scroll_x, actions.scroll_y, sample_interval_us,
+                                             tuning_.scroll_base_scale_q8, scroll_motion_.gain_scale, gain_percent)
+                                       : base_scroll;
         actions.scroll_x = scroll.x;
         actions.scroll_y = scroll.y;
         actions.scroll_x_q8 = scroll.x_q8;
         actions.scroll_y_q8 = scroll.y_q8;
-        update_scroll_release_velocity(scroll);
+        update_scroll_release_velocity(base_scroll);
         return;
     }
 
@@ -595,7 +659,8 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
             // A stationary contact produces no output but contributes a zero
             // velocity sample, preventing stale fast motion from seeding coast.
             const ScaledDelta stationary = scale_active_delta(
-                0, 0, source.sample_interval_us, tuning_.scroll_base_scale_q8, scroll_motion_.active_scale);
+                0, 0, source.sample_interval_us, tuning_.scroll_base_scale_q8,
+                scroll_motion_.active_scale, 100);
             update_scroll_release_velocity(stationary);
             return;
         }
@@ -613,12 +678,43 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
     }
 }
 
+uint16_t DualTps43Fsm::active_scroll_gain_percent(
+    int32_t x,
+    int32_t y,
+    uint64_t sample_interval_us) const {
+    const ActiveScrollGainTuning& tuning = tuning_.active_scroll_gain;
+    if (!tuning.enabled || (x == 0 && y == 0)) {
+        return 100;
+    }
+
+    const uint64_t interval = sample_interval_us != 0 ? sample_interval_us : kFallbackMotionSampleIntervalUs;
+    const uint64_t max_axis_delta = std::max(absolute_int64(x), absolute_int64(y));
+    const uint64_t speed = max_axis_delta * 1000000 / interval;
+    if (speed <= tuning.slow_speed_limit_counts_per_second) {
+        return tuning.slow_gain_percent;
+    }
+    if (speed >= tuning.fast_speed_limit_counts_per_second) {
+        return tuning.fast_gain_percent;
+    }
+
+    const int32_t gain_delta = static_cast<int32_t>(tuning.fast_gain_percent) -
+                               static_cast<int32_t>(tuning.slow_gain_percent);
+    const uint64_t speed_span = tuning.fast_speed_limit_counts_per_second -
+                                tuning.slow_speed_limit_counts_per_second;
+    const uint64_t speed_offset = speed - tuning.slow_speed_limit_counts_per_second;
+    const int64_t interpolated_delta = static_cast<int64_t>(gain_delta) *
+                                       static_cast<int64_t>(speed_offset) /
+                                       static_cast<int64_t>(speed_span);
+    return static_cast<uint16_t>(static_cast<int32_t>(tuning.slow_gain_percent) + interpolated_delta);
+}
+
 DualTps43Fsm::ScaledDelta DualTps43Fsm::scale_active_delta(
     int32_t x,
     int32_t y,
     uint64_t acquisition_interval_us,
     int32_t base_scale_q8,
-    MotionScaleState& state) const {
+    MotionScaleState& state,
+    uint16_t gain_percent) const {
     ScaledDelta result;
     const int32_t scale_q8 = std::max<int32_t>(base_scale_q8, 0);
     const uint64_t interval = acquisition_interval_us != 0
@@ -627,10 +723,10 @@ DualTps43Fsm::ScaledDelta DualTps43Fsm::scale_active_delta(
     result.sample_interval_us = static_cast<uint32_t>(
         std::min<uint64_t>(interval, std::numeric_limits<uint32_t>::max()));
 
-    result.x_q8 = static_cast<int64_t>(x) * scale_q8;
-    result.y_q8 = static_cast<int64_t>(y) * scale_q8;
-    result.x = scaled_axis(x, scale_q8, state.residual_x_q8);
-    result.y = scaled_axis(y, scale_q8, state.residual_y_q8);
+    result.x_q8 = multiply_divide_saturated(static_cast<int64_t>(x) * scale_q8, gain_percent, 100);
+    result.y_q8 = multiply_divide_saturated(static_cast<int64_t>(y) * scale_q8, gain_percent, 100);
+    result.x = q8_axis(result.x_q8, state.residual_x_q8);
+    result.y = q8_axis(result.y_q8, state.residual_y_q8);
     return result;
 }
 
@@ -754,11 +850,6 @@ int64_t DualTps43Fsm::filter_signed(int64_t previous, int64_t current, uint16_t 
 
 uint64_t DualTps43Fsm::absolute_int64(int64_t value) {
     return value < 0 ? static_cast<uint64_t>(-(value + 1)) + 1 : static_cast<uint64_t>(value);
-}
-
-int32_t DualTps43Fsm::scaled_axis(int32_t input, int32_t gain_q8, int64_t& residual_q8) {
-    const int64_t scaled_q8 = static_cast<int64_t>(input) * gain_q8;
-    return q8_axis(scaled_q8, residual_q8);
 }
 
 int32_t DualTps43Fsm::q8_axis(int64_t delta_q8, int64_t& residual_q8) {

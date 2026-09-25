@@ -61,6 +61,17 @@ struct ScrollMomentumTuning {
     uint32_t stop_velocity_logical_units_per_second;
 };
 
+// Optional active-scroll response curve. Speed is measured from normalized
+// pad displacement per sensor sample interval; gains are percentages of the
+// configured scroll base scale and interpolate between the two speed limits.
+struct ActiveScrollGainTuning {
+    bool enabled = false;
+    uint16_t slow_speed_limit_counts_per_second = 200;
+    uint16_t fast_speed_limit_counts_per_second = 1000;
+    uint16_t slow_gain_percent = 200;
+    uint16_t fast_gain_percent = 50;
+};
+
 // Contains all hardware-independent behavior and motion tuning. Values used by
 // host tests are deterministic fixtures, not approved physical tuning.
 struct DualTps43Tuning {
@@ -72,11 +83,12 @@ struct DualTps43Tuning {
     // reported three-finger movement without an extra distance threshold. Unit:
     // normalized pad displacement.
     int32_t neutral_activation_threshold;
-    // Fixed Q8 scale applied to active cursor and scroll deltas. 256 means a
-    // one-to-one normalized-input to logical-output ratio; speed does not
-    // change this scale.
+    // Fixed Q8 base scale applied to active cursor and scroll deltas. 256 means
+    // a one-to-one normalized-input to logical-output ratio. Active scroll may
+    // optionally apply its separate speed curve to this base scale.
     int32_t cursor_base_scale_q8;
     int32_t scroll_base_scale_q8;
+    ActiveScrollGainTuning active_scroll_gain;
     ScrollMomentumTuning scroll_momentum;
     // Minimum absolute dx or dy in one Right report that qualifies
     // Left-assisted Drag. This threshold is per-report, not accumulated.
@@ -159,6 +171,7 @@ class DualTps43Fsm : public DualPadProcessor {
 
     struct ScrollMotionState {
         MotionScaleState active_scale;
+        MotionScaleState gain_scale;
         ScrollSource source = ScrollSource::None;
         int64_t filtered_velocity_x_q8_per_second = 0;
         int64_t filtered_velocity_y_q8_per_second = 0;
@@ -199,16 +212,19 @@ class DualTps43Fsm : public DualPadProcessor {
     void add_right_cursor(const PadState& right, LogicalActions& actions);
     void add_left_scroll(const PadState& left, LogicalActions& actions);
     void add_right_scroll(const PadState& right, LogicalActions& actions);
+    void clear_pending_left_scroll();
     void reset_cursor_temporal_filter();
 
-    // Fixed active-motion scaling and scroll-momentum helpers.
+    // Active-motion scaling and scroll-momentum helpers.
     void apply_motion(const DualPadSnapshot& snapshot, LogicalActions& actions);
+    uint16_t active_scroll_gain_percent(int32_t x, int32_t y, uint64_t sample_interval_us) const;
     ScaledDelta scale_active_delta(
         int32_t x,
         int32_t y,
         uint64_t acquisition_interval_us,
         int32_t base_scale_q8,
-        MotionScaleState& state) const;
+        MotionScaleState& state,
+        uint16_t gain_percent) const;
     void stop_cursor_motion();
     void update_scroll_release_velocity(const ScaledDelta& delta);
     void start_scroll_momentum(uint64_t now_us);
@@ -218,7 +234,6 @@ class DualTps43Fsm : public DualPadProcessor {
     static uint32_t sample_interval_us(uint64_t now_us, uint64_t& last_timestamp_us, uint32_t fallback_us);
     static int64_t filter_signed(int64_t previous, int64_t current, uint16_t weight_q8);
     static uint64_t absolute_int64(int64_t value);
-    static int32_t scaled_axis(int32_t input, int32_t gain_q8, int64_t& residual_q8);
     static int32_t q8_axis(int64_t delta_q8, int64_t& residual_q8);
     static int64_t multiply_divide_saturated(int64_t value, uint32_t multiplier, uint32_t divisor);
     static int32_t saturate_int32(int64_t value);
@@ -243,6 +258,11 @@ class DualTps43Fsm : public DualPadProcessor {
     uint64_t pending_cursor_since_us_ = 0;
     int64_t filtered_cursor_x_q8_ = 0;
     int64_t filtered_cursor_y_q8_ = 0;
+    // Preserve pre-activation Left deltas until movement confirms scroll intent.
+    int32_t pending_left_scroll_x_ = 0;
+    int32_t pending_left_scroll_y_ = 0;
+    uint32_t pending_left_scroll_interval_us_ = 0;
+    uint32_t scroll_sample_interval_override_us_ = 0;
     ScrollMotionState scroll_motion_;
     ScrollSource scroll_source_this_cycle_ = ScrollSource::None;
 };
