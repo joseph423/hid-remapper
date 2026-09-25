@@ -6,6 +6,8 @@
 
 namespace {
 
+constexpr uint32_t kFallbackMotionSampleIntervalUs = 15000;
+
 bool qualifies_left_assisted_drag(const PadState& right, int32_t threshold) {
     if (!right.movement_reported || threshold <= 0) {
         return false;
@@ -501,7 +503,8 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
 
     if (actions.cursor_x != 0 || actions.cursor_y != 0) {
         const ScaledDelta cursor = scale_active_delta(
-            actions.cursor_x, actions.cursor_y, snapshot.right.sample_interval_us, tuning_.cursor_gain, cursor_motion_);
+            actions.cursor_x, actions.cursor_y, snapshot.right.sample_interval_us,
+            tuning_.cursor_base_scale_q8, cursor_motion_);
         actions.cursor_x = cursor.x;
         actions.cursor_y = cursor.y;
         actions.cursor_x_q8 = cursor.x_q8;
@@ -542,9 +545,8 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
             reset_cursor_temporal_filter();
         }
     } else if (snapshot.right.fresh_sample || snapshot.right.touch_ended) {
-        // Velocity history and fractional output must not move the cursor after
-        // the normalized input stops. The temporal filter is reset rather than
-        // emitting its residual as a post-stop cursor tail.
+        // Discard fractional and filter state when input stops rather than
+        // emitting a post-stop cursor tail.
         stop_cursor_motion();
     }
     if (snapshot.right.touch_ended) {
@@ -562,7 +564,7 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
 
     if (scroll_source_this_cycle_ != ScrollSource::None) {
         if (scroll_motion_.source != scroll_source_this_cycle_) {
-            scroll_motion_.active_gain = {};
+            scroll_motion_.active_scale = {};
             scroll_motion_.filtered_velocity_x_q8_per_second = 0;
             scroll_motion_.filtered_velocity_y_q8_per_second = 0;
         }
@@ -571,8 +573,8 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
         stop_scroll_momentum();
         const PadState& source = scroll_source_this_cycle_ == ScrollSource::Left ? snapshot.left : snapshot.right;
         const ScaledDelta scroll = scale_active_delta(
-            actions.scroll_x, actions.scroll_y, source.sample_interval_us, tuning_.scroll_gain,
-            scroll_motion_.active_gain);
+            actions.scroll_x, actions.scroll_y, source.sample_interval_us,
+            tuning_.scroll_base_scale_q8, scroll_motion_.active_scale);
         actions.scroll_x = scroll.x;
         actions.scroll_y = scroll.y;
         actions.scroll_x_q8 = scroll.x_q8;
@@ -593,7 +595,7 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
             // A stationary contact produces no output but contributes a zero
             // velocity sample, preventing stale fast motion from seeding coast.
             const ScaledDelta stationary = scale_active_delta(
-                0, 0, source.sample_interval_us, tuning_.scroll_gain, scroll_motion_.active_gain);
+                0, 0, source.sample_interval_us, tuning_.scroll_base_scale_q8, scroll_motion_.active_scale);
             update_scroll_release_velocity(stationary);
             return;
         }
@@ -602,7 +604,7 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
             start_scroll_momentum(snapshot.cycle_timestamp_us);
         }
         scroll_motion_.source = ScrollSource::None;
-        scroll_motion_.active_gain = {};
+        scroll_motion_.active_scale = {};
         return;
     }
 
@@ -615,30 +617,24 @@ DualTps43Fsm::ScaledDelta DualTps43Fsm::scale_active_delta(
     int32_t x,
     int32_t y,
     uint64_t acquisition_interval_us,
-    const VelocityGainTuning& tuning,
-    VelocityGainState& state) const {
+    int32_t base_scale_q8,
+    MotionScaleState& state) const {
     ScaledDelta result;
+    const int32_t scale_q8 = std::max<int32_t>(base_scale_q8, 0);
     const uint64_t interval = acquisition_interval_us != 0
                                   ? acquisition_interval_us
-                                  : std::max<uint32_t>(tuning.fallback_sample_interval_us, 1);
+                                  : kFallbackMotionSampleIntervalUs;
     result.sample_interval_us = static_cast<uint32_t>(
         std::min<uint64_t>(interval, std::numeric_limits<uint32_t>::max()));
 
-    const uint64_t magnitude = vector_magnitude(x, y);
-    const uint64_t raw_speed = magnitude * 1000000ULL / result.sample_interval_us;
-    state.filtered_speed_pad_units_per_second = filter_unsigned(
-        state.filtered_speed_pad_units_per_second, raw_speed, tuning.velocity_filter_weight_q8);
-
-    const int32_t gain_q8 = velocity_gain_q8(state.filtered_speed_pad_units_per_second, tuning);
-    result.x_q8 = static_cast<int64_t>(x) * gain_q8;
-    result.y_q8 = static_cast<int64_t>(y) * gain_q8;
-    result.x = scaled_axis(x, gain_q8, state.residual_x_q8);
-    result.y = scaled_axis(y, gain_q8, state.residual_y_q8);
+    result.x_q8 = static_cast<int64_t>(x) * scale_q8;
+    result.y_q8 = static_cast<int64_t>(y) * scale_q8;
+    result.x = scaled_axis(x, scale_q8, state.residual_x_q8);
+    result.y = scaled_axis(y, scale_q8, state.residual_y_q8);
     return result;
 }
 
 void DualTps43Fsm::stop_cursor_motion() {
-    cursor_motion_.filtered_speed_pad_units_per_second = 0;
     cursor_motion_.residual_x_q8 = 0;
     cursor_motion_.residual_y_q8 = 0;
     reset_cursor_temporal_filter();
@@ -677,7 +673,7 @@ void DualTps43Fsm::apply_scroll_momentum(uint64_t now_us, LogicalActions& action
     }
 
     const uint32_t interval_us = sample_interval_us(
-        now_us, scroll_motion_.momentum_timestamp_us, tuning_.scroll_gain.fallback_sample_interval_us);
+        now_us, scroll_motion_.momentum_timestamp_us, kFallbackMotionSampleIntervalUs);
     const uint16_t decay_q8 = std::min<uint16_t>(tuning_.scroll_momentum.decay_q8, 256);
     scroll_motion_.momentum_velocity_x_q8_per_second = multiply_divide_saturated(
         scroll_motion_.momentum_velocity_x_q8_per_second, decay_q8, 256);
@@ -742,37 +738,6 @@ uint32_t DualTps43Fsm::sample_interval_us(
                : static_cast<uint32_t>(interval_us);
 }
 
-uint64_t DualTps43Fsm::vector_magnitude(int32_t x, int32_t y) {
-    const uint64_t absolute_x = x < 0 ? static_cast<uint64_t>(-static_cast<int64_t>(x)) : static_cast<uint64_t>(x);
-    const uint64_t absolute_y = y < 0 ? static_cast<uint64_t>(-static_cast<int64_t>(y)) : static_cast<uint64_t>(y);
-    return integer_square_root(absolute_x * absolute_x + absolute_y * absolute_y);
-}
-
-uint64_t DualTps43Fsm::integer_square_root(uint64_t value) {
-    uint64_t result = 0;
-    uint64_t bit = uint64_t{ 1 } << 62;
-    while (bit > value) {
-        bit >>= 2;
-    }
-
-    while (bit != 0) {
-        if (value >= result + bit) {
-            value -= result + bit;
-            result = (result >> 1) + bit;
-        } else {
-            result >>= 1;
-        }
-        bit >>= 2;
-    }
-    return result;
-}
-
-uint64_t DualTps43Fsm::filter_unsigned(uint64_t previous, uint64_t current, uint16_t weight_q8) {
-    const uint16_t current_weight = std::min<uint16_t>(weight_q8, 256);
-    const uint16_t previous_weight = 256 - current_weight;
-    return (previous * previous_weight + current * current_weight + 128) / 256;
-}
-
 int64_t DualTps43Fsm::filter_signed(int64_t previous, int64_t current, uint16_t weight_q8) {
     const uint16_t current_weight = std::min<uint16_t>(weight_q8, 256);
     const uint16_t previous_weight = 256 - current_weight;
@@ -789,22 +754,6 @@ int64_t DualTps43Fsm::filter_signed(int64_t previous, int64_t current, uint16_t 
 
 uint64_t DualTps43Fsm::absolute_int64(int64_t value) {
     return value < 0 ? static_cast<uint64_t>(-(value + 1)) + 1 : static_cast<uint64_t>(value);
-}
-
-int32_t DualTps43Fsm::velocity_gain_q8(
-    uint64_t speed_pad_units_per_second,
-    const VelocityGainTuning& tuning) {
-    const int32_t minimum_gain_q8 = std::max<int32_t>(tuning.minimum_gain_q8, 0);
-    const int32_t maximum_gain_q8 = std::max<int32_t>(tuning.maximum_gain_q8, minimum_gain_q8);
-    if (tuning.full_gain_velocity_pad_units_per_second == 0 ||
-        speed_pad_units_per_second >= tuning.full_gain_velocity_pad_units_per_second) {
-        return maximum_gain_q8;
-    }
-
-    const int64_t gain_range = static_cast<int64_t>(maximum_gain_q8) - minimum_gain_q8;
-    return minimum_gain_q8 + static_cast<int32_t>(
-                                 gain_range * speed_pad_units_per_second /
-                                 tuning.full_gain_velocity_pad_units_per_second);
 }
 
 int32_t DualTps43Fsm::scaled_axis(int32_t input, int32_t gain_q8, int64_t& residual_q8) {

@@ -18,8 +18,8 @@ DualTps43Tuning phase5_behavior_tuning() {
     tuning.tap_max_duration_us = 2000;
     tuning.stationary_intent_threshold_us = 200;
     tuning.neutral_activation_threshold = 5;
-    tuning.cursor_gain = { 512, 512, 1, 256, 100 };
-    tuning.scroll_gain = { 768, 768, 1, 256, 100 };
+    tuning.cursor_base_scale_q8 = 512;
+    tuning.scroll_base_scale_q8 = 768;
     tuning.scroll_momentum = { 256, 0, 0, 0 };
     tuning.left_assisted_drag_axis_threshold = 2;
     return tuning;
@@ -30,8 +30,8 @@ DualTps43Tuning production_behavior_tuning() {
     tuning.tap_max_duration_us = 200000;
     tuning.stationary_intent_threshold_us = 100000;
     tuning.neutral_activation_threshold = 20;
-    tuning.cursor_gain = { 128, 128, 4000, 256, 15000 };
-    tuning.scroll_gain = { 4, 4, 4000, 256, 15000 };
+    tuning.cursor_base_scale_q8 = 128;
+    tuning.scroll_base_scale_q8 = 4;
     tuning.scroll_momentum = { 0, 0, 0, 0 };
     tuning.left_assisted_drag_axis_threshold = 2;
     return tuning;

@@ -47,8 +47,8 @@ void migrate_tps43_tuning_v21(DualTps43Tuning* tuning);
 // Copies the safe runtime-editable subset into the HID protocol structure.
 bool get_configured_tps43_runtime_tuning(tps43_runtime_tuning_t* controls);
 
-// Updates only the safe runtime-editable subset, preserving hidden velocity
-// filters and momentum settings. Returns false without changing the profile
+// Updates only the safe runtime-editable subset, preserving cursor-filter and
+// momentum settings. Returns false without changing the profile
 // when the resulting full tuning is invalid.
 bool set_configured_tps43_runtime_tuning(const tps43_runtime_tuning_set_t& controls);
 

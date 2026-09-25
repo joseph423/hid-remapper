@@ -47,22 +47,6 @@ struct LogicalActions {
     ButtonAction right_button = ButtonAction::None;
 };
 
-// Configures velocity-dependent gain for one motion channel. Input velocity is
-// measured in normalized pad units per second. Gains use Q8 fixed point, where
-// 256 means one logical output unit per normalized pad unit. Filter weight is
-// in [0, 256], where 256 uses only the current velocity sample.
-struct VelocityGainTuning {
-    // Logical output units per normalized pad unit, in Q8.
-    int32_t minimum_gain_q8;
-    int32_t maximum_gain_q8;
-    // Normalized pad units per second that select maximum gain.
-    uint32_t full_gain_velocity_pad_units_per_second;
-    // Current velocity sample weight in Q8.
-    uint16_t velocity_filter_weight_q8;
-    // Microseconds used only when consecutive timestamps do not advance.
-    uint32_t fallback_sample_interval_us;
-};
-
 // Configures post-release scroll momentum. Velocity uses logical output units
 // per second in Q8 fixed point. Q8 filter, launch, and decay coefficients use
 // 256 as 1.0; decay must be below 256 for momentum to reach the cutoff.
@@ -88,8 +72,11 @@ struct DualTps43Tuning {
     // reported three-finger movement without an extra distance threshold. Unit:
     // normalized pad displacement.
     int32_t neutral_activation_threshold;
-    VelocityGainTuning cursor_gain;
-    VelocityGainTuning scroll_gain;
+    // Fixed Q8 scale applied to active cursor and scroll deltas. 256 means a
+    // one-to-one normalized-input to logical-output ratio; speed does not
+    // change this scale.
+    int32_t cursor_base_scale_q8;
+    int32_t scroll_base_scale_q8;
     ScrollMomentumTuning scroll_momentum;
     // Minimum absolute dx or dy in one Right report that qualifies
     // Left-assisted Drag. This threshold is per-report, not accumulated.
@@ -122,7 +109,7 @@ class DualPadProcessor {
 // Applies the dual-pad behavior contract and motion scaling to normalized input.
 class DualTps43Fsm : public DualPadProcessor {
    public:
-    // Creates an FSM with explicit behavior, velocity-gain, and momentum tuning.
+    // Creates an FSM with explicit behavior, fixed-scale, and momentum tuning.
     // Input: tuning values whose units and valid coefficient ranges are defined
     // by DualTps43Tuning and its nested tuning structures. Output: a reset FSM.
     explicit DualTps43Fsm(DualTps43Tuning tuning);
@@ -159,8 +146,7 @@ class DualTps43Fsm : public DualPadProcessor {
         uint32_t preceding_other_session_id = 0;
     };
 
-    struct VelocityGainState {
-        uint64_t filtered_speed_pad_units_per_second = 0;
+    struct MotionScaleState {
         int64_t residual_x_q8 = 0;
         int64_t residual_y_q8 = 0;
     };
@@ -172,7 +158,7 @@ class DualTps43Fsm : public DualPadProcessor {
     };
 
     struct ScrollMotionState {
-        VelocityGainState active_gain;
+        MotionScaleState active_scale;
         ScrollSource source = ScrollSource::None;
         int64_t filtered_velocity_x_q8_per_second = 0;
         int64_t filtered_velocity_y_q8_per_second = 0;
@@ -215,9 +201,14 @@ class DualTps43Fsm : public DualPadProcessor {
     void add_right_scroll(const PadState& right, LogicalActions& actions);
     void reset_cursor_temporal_filter();
 
-    // Velocity-gain and scroll-momentum helpers.
+    // Fixed active-motion scaling and scroll-momentum helpers.
     void apply_motion(const DualPadSnapshot& snapshot, LogicalActions& actions);
-    ScaledDelta scale_active_delta(int32_t x, int32_t y, uint64_t acquisition_interval_us, const VelocityGainTuning& tuning, VelocityGainState& state) const;
+    ScaledDelta scale_active_delta(
+        int32_t x,
+        int32_t y,
+        uint64_t acquisition_interval_us,
+        int32_t base_scale_q8,
+        MotionScaleState& state) const;
     void stop_cursor_motion();
     void update_scroll_release_velocity(const ScaledDelta& delta);
     void start_scroll_momentum(uint64_t now_us);
@@ -225,12 +216,8 @@ class DualTps43Fsm : public DualPadProcessor {
     void stop_scroll_momentum();
     bool scroll_source_active(const DualPadSnapshot& snapshot) const;
     static uint32_t sample_interval_us(uint64_t now_us, uint64_t& last_timestamp_us, uint32_t fallback_us);
-    static uint64_t vector_magnitude(int32_t x, int32_t y);
-    static uint64_t integer_square_root(uint64_t value);
-    static uint64_t filter_unsigned(uint64_t previous, uint64_t current, uint16_t weight_q8);
     static int64_t filter_signed(int64_t previous, int64_t current, uint16_t weight_q8);
     static uint64_t absolute_int64(int64_t value);
-    static int32_t velocity_gain_q8(uint64_t speed_pad_units_per_second, const VelocityGainTuning& tuning);
     static int32_t scaled_axis(int32_t input, int32_t gain_q8, int64_t& residual_q8);
     static int32_t q8_axis(int64_t delta_q8, int64_t& residual_q8);
     static int64_t multiply_divide_saturated(int64_t value, uint32_t multiplier, uint32_t divisor);
@@ -250,7 +237,7 @@ class DualTps43Fsm : public DualPadProcessor {
     int64_t neutral_right_y_ = 0;
     bool right_latched_saw_inactive_ = false;
     uint32_t right_latched_drop_session_id_ = 0;
-    VelocityGainState cursor_motion_;
+    MotionScaleState cursor_motion_;
     int64_t pending_cursor_x_ = 0;
     int64_t pending_cursor_y_ = 0;
     uint64_t pending_cursor_since_us_ = 0;

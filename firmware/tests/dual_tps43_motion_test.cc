@@ -17,8 +17,8 @@ DualTps43Tuning motion_tuning() {
     tuning.tap_max_duration_us = 200000;
     tuning.stationary_intent_threshold_us = 200000;
     tuning.neutral_activation_threshold = 50;
-    tuning.cursor_gain = { 256, 1024, 1000, 256, 10000 };
-    tuning.scroll_gain = { 256, 768, 1000, 256, 10000 };
+    tuning.cursor_base_scale_q8 = 256;
+    tuning.scroll_base_scale_q8 = 256;
     tuning.scroll_momentum = { 256, 256, 192, 100 };
     tuning.left_assisted_drag_axis_threshold = 2;
     tuning.subthreshold_cursor_threshold = 2;
@@ -130,7 +130,7 @@ void run_case(const char* name, const std::function<void()>& test) {
 int main() {
     run_case("MOTION-18 adaptive-cursor-filter-uses-speed-bands-only-on-cursor", [] {
         DualTps43Tuning tuning = motion_tuning();
-        tuning.cursor_gain = { 256, 256, 4000, 256, 15000 };
+        tuning.cursor_base_scale_q8 = 256;
         tuning.subthreshold_cursor_threshold = 1;
         tuning.cursor_temporal_filter_enabled = true;
         tuning.cursor_filter_slow_speed_limit_counts_per_second = 80;
@@ -199,7 +199,7 @@ int main() {
 
     run_case("MOTION-19 cursor-filter-disable-and-stop-reset", [] {
         DualTps43Tuning tuning = motion_tuning();
-        tuning.cursor_gain = { 256, 256, 4000, 256, 15000 };
+        tuning.cursor_base_scale_q8 = 256;
         tuning.subthreshold_cursor_threshold = 1;
         tuning.cursor_temporal_filter_enabled = true;
         tuning.cursor_filter_slow_weight_percent = 20;
@@ -233,7 +233,7 @@ int main() {
             "disabled filter must preserve the original scaled cursor delta");
     });
 
-    run_case("MOTION-01 slow-versus-fast-cursor-gain", [] {
+    run_case("MOTION-01 active-cursor-scale-is-independent-of-speed", [] {
         Harness slow;
         slow.step(inactive(), one_finger(), 10000);
         const LogicalActions slow_action = slow.step(inactive(), one_finger(10, 0), 100000);
@@ -242,11 +242,10 @@ int main() {
         fast.step(inactive(), one_finger(), 10000);
         const LogicalActions fast_action = fast.step(inactive(), one_finger(10, 0), 10000);
 
-        require(slow_action.cursor_x > 0, "slow cursor input must remain usable");
-        require(fast_action.cursor_x > slow_action.cursor_x,
-            "faster cursor input must receive greater gain for equal displacement");
+        require(slow_action.cursor_x == 10 && fast_action.cursor_x == 10,
+            "equal cursor displacement must use the same fixed base scale at every speed");
         require(slow_action.scroll_x == 0 && fast_action.scroll_x == 0,
-            "cursor gain must not create scroll output");
+            "fixed cursor scale must not create scroll output");
     });
 
     run_case("MOTION-14 accumulates-subthreshold-cursor-deltas-per-axis", [] {
@@ -321,7 +320,7 @@ int main() {
         require(action.cursor_x > 0, "threshold 3 must emit once the accumulated axis reaches 3");
     });
 
-    run_case("MOTION-02 slow-versus-fast-active-scroll-gain", [] {
+    run_case("MOTION-02 active-scroll-scale-is-independent-of-speed", [] {
         Harness slow;
         slow.step(inactive(), two_finger(), 10000);
         const LogicalActions slow_action = slow.step(inactive(), two_finger(0, 10), 100000);
@@ -330,26 +329,16 @@ int main() {
         fast.step(inactive(), two_finger(), 10000);
         const LogicalActions fast_action = fast.step(inactive(), two_finger(0, 10), 10000);
 
-        require(slow_action.scroll_y > 0, "slow active scrolling must remain usable");
-        require(fast_action.scroll_y > slow_action.scroll_y,
-            "faster active scrolling must receive greater gain for equal displacement");
+        require(slow_action.scroll_y == 10 && fast_action.scroll_y == 10,
+            "equal scroll displacement must use the same fixed base scale at every speed");
         require(slow_action.cursor_y == 0 && fast_action.cursor_y == 0,
-            "active scroll gain must not create cursor output");
-
-        DualTps43Tuning filtered_tuning = motion_tuning();
-        filtered_tuning.scroll_gain.velocity_filter_weight_q8 = 128;
-        Harness filtered(filtered_tuning);
-        filtered.step(inactive(), two_finger(), 10000);
-        const LogicalActions first_filtered = filtered.step(inactive(), two_finger(0, 10), 10000);
-        const LogicalActions second_filtered = filtered.step(inactive(), two_finger(0, 10), 10000);
-        require(second_filtered.scroll_y > first_filtered.scroll_y,
-            "partial active-scroll filtering must retain velocity history across equal fast samples");
+            "fixed active scroll scale must not create cursor output");
     });
 
     run_case("MOTION-13 fractional-motion-reaches-output-boundary", [] {
         DualTps43Tuning tuning = motion_tuning();
-        tuning.cursor_gain = { 128, 128, 1000, 256, 10000 };
-        tuning.scroll_gain = { 4, 4, 1000, 256, 10000 };
+        tuning.cursor_base_scale_q8 = 128;
+        tuning.scroll_base_scale_q8 = 4;
         tuning.scroll_momentum = { 0, 0, 0, 0 };
 
         Harness cursor(tuning);
@@ -406,7 +395,7 @@ int main() {
 
             // The first outputs are the exact black-box result of applying the
             // configured 0.75 velocity decay before each 10 ms momentum step.
-            const int32_t expected_initial_outputs[] = { 45, 33, 26 };
+            const int32_t expected_initial_outputs[] = { 15, 11, 8 };
             if (cycle < 3) {
                 require(action.scroll_y == expected_initial_outputs[cycle],
                     "momentum output must follow the configured velocity-decay recurrence");
@@ -501,33 +490,41 @@ int main() {
             "prevented same-cycle momentum must remain stopped");
     });
 
-    run_case("MOTION-08 velocity-filter-state-affects-gain", [] {
+    run_case("MOTION-08 active-cursor-scale-is-independent-of-speed", [] {
         DualTps43Tuning tuning = motion_tuning();
-        tuning.cursor_gain.velocity_filter_weight_q8 = 128;
-        Harness harness(tuning);
-        harness.step(inactive(), one_finger(), 10000);
+        tuning.cursor_base_scale_q8 = 512;
+        Harness slow(tuning);
+        slow.step(inactive(), one_finger(), 10000);
+        const LogicalActions slow_action = slow.step(inactive(), one_finger(10, 0), 100000);
 
-        const LogicalActions first = harness.step(inactive(), one_finger(10, 0), 10000);
-        const LogicalActions second = harness.step(inactive(), one_finger(10, 0), 10000);
-        require(second.cursor_x > first.cursor_x,
-            "filtered velocity history must raise gain across consecutive fast samples");
+        Harness fast(tuning);
+        fast.step(inactive(), one_finger(), 10000);
+        const LogicalActions fast_action = fast.step(inactive(), one_finger(10, 0), 10000);
+        require(slow_action.cursor_x == 20 && fast_action.cursor_x == 20,
+            "configured cursor base scale must be honored equally at every speed");
     });
 
-    run_case("MOTION-09 fallback-interval-handles-nonadvancing-time", [] {
+    run_case("MOTION-09 fallback-interval-preserves-filter-speed-classification", [] {
         DualTps43Tuning tuning = motion_tuning();
-        tuning.cursor_gain.fallback_sample_interval_us = 20000;
+        tuning.cursor_base_scale_q8 = 256;
+        tuning.subthreshold_cursor_threshold = 1;
+        tuning.cursor_temporal_filter_enabled = true;
+        tuning.cursor_filter_slow_speed_limit_counts_per_second = 700;
+        tuning.cursor_filter_fast_speed_limit_counts_per_second = 900;
+        tuning.cursor_filter_slow_weight_percent = 100;
+        tuning.cursor_filter_normal_weight_percent = 0;
         Harness harness(tuning);
-        harness.step(inactive(), one_finger(), 10000);
+        harness.step(inactive(), one_finger(), 0);
         const LogicalActions action = harness.step(inactive(), one_finger(10, 0), 0);
-        require(action.cursor_x == 25,
-            "non-advancing time must use the configured 20 ms fallback interval for cursor gain");
+        require(action.cursor_x_q8 == 0,
+            "zero acquisition interval must use the 15 ms fallback and select the slow filter band");
         require(action.scroll_x == 0 && action.scroll_y == 0,
-            "fallback cursor timing must not create scroll output");
+            "cursor-filter timing must not create scroll output");
     });
 
     run_case("MOTION-10 fractional-momentum-displacement-accumulates", [] {
         DualTps43Tuning tuning = motion_tuning();
-        tuning.scroll_gain = { 256, 256, 1, 256, 10000 };
+        tuning.scroll_base_scale_q8 = 256;
         tuning.scroll_momentum = { 256, 256, 255, 0 };
         Harness harness(tuning);
         harness.step(inactive(), two_finger(), 10000);
@@ -557,11 +554,11 @@ int main() {
             require_no_scroll(harness.step(inactive(), three_finger(0), 10000));
             const LogicalActions entry = harness.step(inactive(), three_finger(10), 10000);
             require_no_scroll(entry);
-            require(entry.left_button == ButtonAction::Press && entry.cursor_x == 40,
-                "drag entry must press and retain velocity-scaled centroid movement");
+            require(entry.left_button == ButtonAction::Press && entry.cursor_x == 10,
+                "drag entry must press and retain fixed-scale centroid movement");
             const LogicalActions continued = harness.step(inactive(), three_finger(20), 10000);
             require_no_scroll(continued);
-            require(continued.cursor_x == 40 && continued.left_button == ButtonAction::None,
+            require(continued.cursor_x == 10 && continued.left_button == ButtonAction::None,
                 "continued centroid movement must retain the latch");
             for (int cycle = 0; cycle < 5; cycle++) {
                 const LogicalActions inactive_cycle = harness.step(inactive(), inactive(), 10000);
@@ -571,7 +568,7 @@ int main() {
             require_no_scroll(harness.step(one_finger(0, 10), two_finger(0, 10), 10000));
             const LogicalActions cursor = harness.step(inactive(), one_finger(10, 0), 10000);
             require_no_scroll(cursor);
-            require(cursor.cursor_x == 40 && cursor.left_button == ButtonAction::None,
+            require(cursor.cursor_x == 10 && cursor.left_button == ButtonAction::None,
                 "one-finger cursor must continue while latched");
             require_no_scroll(harness.step(inactive(), inactive(), 10000));
             require_no_scroll(harness.step(inactive(), one_finger(), 10000));
@@ -610,8 +607,8 @@ int main() {
             // launch history even when a partial filter would retain velocity.
             const LogicalActions entry = harness.step(one_finger(), one_finger(10, 0), 10000);
             require_no_scroll(entry);
-            require(entry.left_button == ButtonAction::Press && entry.cursor_x == 40,
-                "Left-assisted entry must press and retain scaled cursor movement");
+            require(entry.left_button == ButtonAction::Press && entry.cursor_x == 10,
+                "Left-assisted entry must press and retain fixed-scale cursor movement");
             for (int cycle = 0; cycle < 5; cycle++) {
                 const LogicalActions lifted = harness.step(one_finger(), inactive(), 10000);
                 require_no_scroll(lifted);
@@ -619,7 +616,7 @@ int main() {
             }
             const LogicalActions retouch = harness.step(one_finger(), one_finger(10, 0), 10000);
             require_no_scroll(retouch);
-            require(retouch.cursor_x == 40 && retouch.left_button == ButtonAction::None,
+            require(retouch.cursor_x == 10 && retouch.left_button == ButtonAction::None,
                 "Right retouch must continue cursor movement without another press");
             require_no_scroll(harness.step(one_finger(0, 10), two_finger(0, 20), 10000));
             require_no_scroll(harness.step(one_finger(), inactive(), 10000));

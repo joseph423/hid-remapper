@@ -161,8 +161,14 @@ void verify_acquisition_edges() {
 }
 
 DualTps43Tuning acquisition_tuning() {
-    return { 200000, 200, 5, { 256, 1024, 1000, 128, 10000 },
-        { 256, 768, 1000, 256, 10000 }, { 256, 256, 192, 100 } };
+    DualTps43Tuning tuning{};
+    tuning.tap_max_duration_us = 200000;
+    tuning.stationary_intent_threshold_us = 200;
+    tuning.neutral_activation_threshold = 5;
+    tuning.cursor_base_scale_q8 = 256;
+    tuning.scroll_base_scale_q8 = 768;
+    tuning.scroll_momentum = { 256, 256, 192, 100 };
+    return tuning;
 }
 
 // Exercises the production coordinator and FSM with independently published
@@ -322,7 +328,7 @@ void verify_motion_acquisition_timing() {
         harness->right.set_next_sample(compact_sample(true, 1, 0, 0, 10000));
         harness->tick(10000);
         harness->right.set_next_sample(compact_sample(true, 1, 10, 0, 20000));
-        require(harness->tick(20000).cursor_x == 25, "first filtered velocity gain must match acquisition timing");
+        require(harness->tick(20000).cursor_x == 10, "cursor output must use the fixed base scale");
     }
     for (uint64_t time : { 21000, 25000, 29000 }) {
         require(extra_ticks.tick(time).cursor_x == 0, "missing acquisitions must not emit cursor movement");
@@ -330,12 +336,12 @@ void verify_motion_acquisition_timing() {
     sparse.right.set_next_sample(compact_sample(true, 1, 10, 0, 30000));
     extra_ticks.right.set_next_sample(compact_sample(true, 1, 10, 0, 30000));
     const int32_t expected = sparse.tick(30000).cursor_x;
-    require(expected > 25 && extra_ticks.tick(35000).cursor_x == expected,
-        "extra ticks and delayed delivery must not reset filtering or shorten the acquisition interval");
+    require(expected == 10 && extra_ticks.tick(35000).cursor_x == expected,
+        "extra ticks and delayed delivery must not alter fixed cursor scaling");
     extra_ticks.right.set_next_sample(compact_sample(true, 1, 0, 0, 40000));
     require(extra_ticks.tick(40000).cursor_x == 0, "a fresh stationary acquisition must stop cursor output");
     extra_ticks.right.set_next_sample(compact_sample(true, 1, 10, 0, 50000));
-    require(extra_ticks.tick(50000).cursor_x == 25, "fresh stationary input must reset cursor history");
+    require(extra_ticks.tick(50000).cursor_x == 10, "fresh stationary input must retain fixed cursor scaling");
 }
 
 void verify_scroll_gaps_and_stationary_intent() {

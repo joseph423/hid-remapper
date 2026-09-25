@@ -10,18 +10,8 @@ void assert_equal(const DualTps43Tuning& expected, const DualTps43Tuning& actual
     assert(expected.stationary_intent_threshold_us == actual.stationary_intent_threshold_us);
     assert(expected.neutral_activation_threshold == actual.neutral_activation_threshold);
     assert(expected.left_assisted_drag_axis_threshold == actual.left_assisted_drag_axis_threshold);
-    assert(expected.cursor_gain.minimum_gain_q8 == actual.cursor_gain.minimum_gain_q8);
-    assert(expected.cursor_gain.maximum_gain_q8 == actual.cursor_gain.maximum_gain_q8);
-    assert(expected.cursor_gain.full_gain_velocity_pad_units_per_second ==
-        actual.cursor_gain.full_gain_velocity_pad_units_per_second);
-    assert(expected.cursor_gain.velocity_filter_weight_q8 == actual.cursor_gain.velocity_filter_weight_q8);
-    assert(expected.cursor_gain.fallback_sample_interval_us == actual.cursor_gain.fallback_sample_interval_us);
-    assert(expected.scroll_gain.minimum_gain_q8 == actual.scroll_gain.minimum_gain_q8);
-    assert(expected.scroll_gain.maximum_gain_q8 == actual.scroll_gain.maximum_gain_q8);
-    assert(expected.scroll_gain.full_gain_velocity_pad_units_per_second ==
-        actual.scroll_gain.full_gain_velocity_pad_units_per_second);
-    assert(expected.scroll_gain.velocity_filter_weight_q8 == actual.scroll_gain.velocity_filter_weight_q8);
-    assert(expected.scroll_gain.fallback_sample_interval_us == actual.scroll_gain.fallback_sample_interval_us);
+    assert(expected.cursor_base_scale_q8 == actual.cursor_base_scale_q8);
+    assert(expected.scroll_base_scale_q8 == actual.scroll_base_scale_q8);
     assert(expected.scroll_momentum.release_velocity_filter_weight_q8 ==
            actual.scroll_momentum.release_velocity_filter_weight_q8);
     assert(expected.scroll_momentum.launch_gain_q8 == actual.scroll_momentum.launch_gain_q8);
@@ -55,13 +45,12 @@ int main() {
     assert_equal(defaults, configured_tps43_tuning());
 
     DualTps43Tuning configured = defaults;
-    configured.cursor_gain.minimum_gain_q8 = 256;
-    configured.cursor_gain.maximum_gain_q8 = 256;
+    configured.cursor_base_scale_q8 = 256;
     set_configured_tps43_tuning(configured);
     assert_equal(configured, configured_tps43_tuning());
 
     DualTps43Tuning invalid_configured = configured;
-    invalid_configured.scroll_gain.velocity_filter_weight_q8 = 257;
+    invalid_configured.scroll_base_scale_q8 = -1;
     set_configured_tps43_tuning(invalid_configured);
     assert_equal(defaults, configured_tps43_tuning());
 
@@ -72,12 +61,31 @@ int main() {
     assert(decode_tps43_tuning(buffer, sizeof(buffer), &decoded));
     assert_equal(defaults, decoded);
 
+    // Older blocks stored min/max velocity gains in these slots. Retain the
+    // first value as the fixed scale and ignore the retired fields.
+    uint8_t old_format_scale_block[kTps43TuningBlockSize] = {};
+    for (std::size_t i = 0; i < sizeof(old_format_scale_block); i++) {
+        old_format_scale_block[i] = buffer[i];
+    }
+    old_format_scale_block[28] = 192;
+    old_format_scale_block[32] = 0;
+    old_format_scale_block[33] = 4;
+    old_format_scale_block[46] = 12;
+    old_format_scale_block[50] = 0;
+    old_format_scale_block[51] = 8;
+    assert(decode_tps43_tuning(old_format_scale_block, sizeof(old_format_scale_block), &decoded));
+    assert(decoded.cursor_base_scale_q8 == 192 && decoded.scroll_base_scale_q8 == 12);
+    uint8_t canonical_block[kTps43TuningBlockSize] = {};
+    assert(encode_tps43_tuning(decoded, canonical_block, sizeof(canonical_block)));
+    assert(canonical_block[28] == 192 && canonical_block[32] == 192 &&
+           canonical_block[46] == 12 && canonical_block[50] == 12);
+
     DualTps43Tuning saved_v21 = defaults;
     saved_v21.subthreshold_cursor_threshold = 171;
-    saved_v21.cursor_gain.minimum_gain_q8 = 192;
+    saved_v21.cursor_base_scale_q8 = 192;
     migrate_tps43_tuning_v21(&saved_v21);
     assert(saved_v21.subthreshold_cursor_threshold == defaults.subthreshold_cursor_threshold);
-    assert(saved_v21.cursor_gain.minimum_gain_q8 == 192);
+    assert(saved_v21.cursor_base_scale_q8 == 192);
 
     uint8_t legacy_v1[kTps43TuningBlockV1Size] = {};
     for (std::size_t i = 0; i < sizeof(legacy_v1); i++) {
@@ -148,7 +156,7 @@ int main() {
     invalid.stationary_intent_threshold_us = invalid.tap_max_duration_us;
     assert(!validate_tps43_tuning(invalid));
     invalid = defaults;
-    invalid.cursor_gain.velocity_filter_weight_q8 = 257;
+    invalid.cursor_base_scale_q8 = -1;
     assert(!validate_tps43_tuning(invalid));
     invalid = defaults;
     invalid.scroll_momentum.decay_q8 = 256;
@@ -190,8 +198,8 @@ int main() {
     assert(updated.stationary_intent_threshold_us == 125000);
     assert(updated.neutral_activation_threshold == 24);
     assert(updated.left_assisted_drag_axis_threshold == 3);
-    assert(updated.cursor_gain.minimum_gain_q8 == 192 && updated.cursor_gain.maximum_gain_q8 == 192);
-    assert(updated.scroll_gain.minimum_gain_q8 == 8 && updated.scroll_gain.maximum_gain_q8 == 8);
+    assert(updated.cursor_base_scale_q8 == 192);
+    assert(updated.scroll_base_scale_q8 == 8);
     assert(updated.subthreshold_cursor_expiry_us == 125000);
     assert(updated.subthreshold_cursor_threshold == 4);
     assert(updated.scroll_momentum.release_velocity_filter_weight_q8 == 0);
