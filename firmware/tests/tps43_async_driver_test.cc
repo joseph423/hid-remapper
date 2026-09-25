@@ -163,7 +163,7 @@ void test_delayed_fifo_poll_and_reset_not_ready() {
     assert(acquire(driver));
 }
 
-void test_active_report_interval_test_and_restore() {
+void test_active_report_interval_default_and_diagnostic_baseline() {
     auto driver = make_driver();
     assert(driver.request_active_report_interval(8));
     for (int i = 0; i < 20; ++i)
@@ -191,14 +191,8 @@ void test_active_report_interval_test_and_restore() {
     assert(report_interval_writes.size() == 2);
     assert((report_interval_writes[1] == std::vector<uint8_t>{ 0, 13 }));
     assert(!driver.service(fake_now));
-    assert(driver.request_active_report_interval(7));
-    fake_rdy = true;
-    for (int i = 0; i < 100 && driver.timing().active_report_interval_ms != 7; ++i)
-        tick(driver);
-    fake_rdy = false;
-    assert(driver.timing().active_report_interval_ms == 7);
-    assert(report_interval_writes.size() == 3);
-    assert((report_interval_writes[2] == std::vector<uint8_t>{ 0, 7 }));
+    assert(report_interval_writes.size() == 2);
+    assert(!driver.request_active_report_interval(7));
     assert(!driver.request_active_report_interval(50));
 }
 
@@ -328,6 +322,6 @@ int main() {
     test_forced_wake_and_fault_rejection();
     test_diagnostic_same_window_and_clock_rollover();
     test_delayed_fifo_poll_and_reset_not_ready();
-    test_active_report_interval_test_and_restore();
+    test_active_report_interval_default_and_diagnostic_baseline();
     puts("asynchronous driver tests passed");
 }

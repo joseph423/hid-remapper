@@ -373,12 +373,14 @@ int main() {
         }
         tps43_cdc_stdio_flush();
         tps43_timing_capture.poll_serial();
+#ifdef TPS43_ENABLE_SERIAL_RATE_OVERRIDE
         uint16_t requested_report_interval_ms = 0;
         if (tps43_timing_capture.take_active_report_interval_request(requested_report_interval_ms) &&
             !right_tps43_driver.request_active_report_interval(requested_report_interval_ms)) {
-            printf("TPS43 active_report_interval_request_ms=%u result=rejected\n",
+            printf("TPS43 active_report_interval_request_ms=%u pad=right result=busy\n",
                 requested_report_interval_ms);
         }
+#endif
         if (boot_protocol_updated) {
             parse_our_descriptor();
             boot_protocol_updated = false;

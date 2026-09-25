@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 #include "pico/stdlib.h"
 
@@ -29,12 +30,10 @@ void print_contact_slots(const Tps43Sample& sample) {
 }  // namespace
 
 void Tps43TimingCapture::begin() {
-    printf("TPS43 async runtime timing capture; M = 15-second normal-use capture (no forced reads)\n");
-    printf("7 = test %u ms; 8 = set RIGHT TPS43 active interval to %u ms; B = restore %u ms baseline\n",
-        kTps43SevenMsActiveReportIntervalMs, kTps43DefaultActiveReportIntervalMs,
-        kTps43BaselineActiveReportIntervalMs);
-    printf("D = toggle 10 Hz dual-pad compact-sample debug (cached samples; no extra sensor reads)\n");
-    printf("C = 40-second Phase 11 capture after a 1-second settling delay\n");
+    printf("TPS43 serial commands are complete lines; M=normal capture, D=debug toggle, C=Phase 11, capture=arm report stage\n");
+#ifdef TPS43_ENABLE_SERIAL_RATE_OVERRIDE
+    printf("Diagnostic only: rate right 8|13 = request volatile report interval in ms\n");
+#endif
     printf("STAGE: one-finger compact report samples=%zu\n", kCompactSamples);
     print_sample_prompt();
 }
@@ -240,44 +239,102 @@ bool Tps43TimingCapture::diagnostic_contact_requested() const {
 
 void Tps43TimingCapture::poll_serial() {
     tps43_normal_capture_poll(time_us_64());
-    bool enter_received = false;
     int character;
     // Bound input processing even if the host continuously writes CDC data.
     for (unsigned n = 0; n < 32 && (character = getchar_timeout_us(0)) >= 0; ++n) {
-        if ((character == 'c' || character == 'C') && !armed_ && !tps43_normal_capture_busy() &&
-            !phase11_capture_busy()) {
-            manual_debug_enabled_ = false;
-            left_input_session_ = {};
-            right_input_session_ = {};
-            request_concurrent_capture(time_us_64());
-        } else if ((character == 'd' || character == 'D') && !phase11_capture_busy()) {
+        if (serial_ignore_next_lf_) {
+            serial_ignore_next_lf_ = false;
+            if (character == '\n') {
+                continue;
+            }
+        }
+
+        if (character == '\r' || character == '\n') {
+            if (serial_discarding_line_) {
+                serial_discarding_line_ = false;
+                serial_line_length_ = 0;
+            } else {
+                serial_line_[serial_line_length_] = '\0';
+                dispatch_serial_line();
+                serial_line_length_ = 0;
+            }
+            serial_line_[0] = '\0';
+            serial_ignore_next_lf_ = character == '\r';
+            continue;
+        }
+
+        // Terminals can send ESC/CSI/SS3 and mouse-report bytes on scroll.
+        // Reject the entire line and stay in discard mode through its delimiter.
+        if (character < 0x20 || character > 0x7e) {
+            serial_discarding_line_ = true;
+            serial_line_length_ = 0;
+            serial_line_[0] = '\0';
+            continue;
+        }
+        if (!serial_discarding_line_) {
+            if (serial_line_length_ + 1 >= kSerialLineCapacity) {
+                serial_discarding_line_ = true;
+                serial_line_length_ = 0;
+                serial_line_[0] = '\0';
+            } else {
+                serial_line_[serial_line_length_++] = static_cast<char>(character);
+                serial_line_[serial_line_length_] = '\0';
+            }
+        }
+    }
+}
+
+void Tps43TimingCapture::dispatch_serial_line() {
+    if (strcmp(serial_line_, "M") == 0 || strcmp(serial_line_, "m") == 0) {
+        if (!armed_ && !phase11_capture_busy()) {
+            tps43_normal_capture_start(time_us_64());
+        }
+        return;
+    }
+    if (strcmp(serial_line_, "D") == 0 || strcmp(serial_line_, "d") == 0) {
+        if (!phase11_capture_busy()) {
             manual_debug_enabled_ = !manual_debug_enabled_;
             last_manual_debug_us_ = 0;
             printf("manual_debug=%s interval_ms=100 source=cached_compact_samples\n",
                 manual_debug_enabled_ ? "on" : "off");
-        } else if ((character == 'm' || character == 'M') && !armed_ && !phase11_capture_busy()) {
-            tps43_normal_capture_start(time_us_64());
-        } else if ((character == '7' || character == '8' || character == 'b' || character == 'B') &&
-                   !armed_ && !tps43_normal_capture_busy() && !phase11_capture_busy() &&
-                   !active_report_interval_request_pending_) {
-            requested_active_report_interval_ms_ = character == '7'
-                                                       ? kTps43SevenMsActiveReportIntervalMs
-                                                   : character == '8' ? kTps43DefaultActiveReportIntervalMs
-                                                                      : kTps43BaselineActiveReportIntervalMs;
+        }
+        return;
+    }
+    if (strcmp(serial_line_, "C") == 0 || strcmp(serial_line_, "c") == 0) {
+        if (!armed_ && !tps43_normal_capture_busy() && !phase11_capture_busy()) {
+            manual_debug_enabled_ = false;
+            left_input_session_ = {};
+            right_input_session_ = {};
+            request_concurrent_capture(time_us_64());
+        }
+        return;
+    }
+    if (strcmp(serial_line_, "capture") == 0) {
+        if (!armed_ && !tps43_normal_capture_busy() &&
+            !phase11_capture_busy() && stage_ != Stage::Complete) {
+            armed_ = true;
+            captured_samples_ = 0;
+            stage_mismatches_ = 0;
+            printf("capture_armed=yes; collecting %zu complete reports automatically\n", kCompactSamples);
+        }
+        return;
+    }
+#ifdef TPS43_ENABLE_SERIAL_RATE_OVERRIDE
+    if (strcmp(serial_line_, "rate right 8") == 0 || strcmp(serial_line_, "rate right 13") == 0) {
+        requested_active_report_interval_ms_ = strcmp(serial_line_, "rate right 8") == 0
+                                                   ? kTps43DefaultActiveReportIntervalMs
+                                                   : kTps43BaselineActiveReportIntervalMs;
+        if (!armed_ && !tps43_normal_capture_busy() && !phase11_capture_busy() &&
+            !active_report_interval_request_pending_) {
             active_report_interval_request_pending_ = true;
-            printf("TPS43 active_report_interval_request_ms=%u pad=right persistence=volatile\n",
+            printf("TPS43 active_report_interval_request_ms=%u pad=right result=queued persistence=volatile\n",
                 requested_active_report_interval_ms_);
-        } else if (character == '\r' || character == '\n') {
-            enter_received = true;
+        } else {
+            printf("TPS43 active_report_interval_request_ms=%u pad=right result=busy\n",
+                requested_active_report_interval_ms_);
         }
     }
-    if (enter_received && !armed_ && !tps43_normal_capture_busy() &&
-        !phase11_capture_busy() && stage_ != Stage::Complete) {
-        armed_ = true;
-        captured_samples_ = 0;
-        stage_mismatches_ = 0;
-        printf("capture_armed=yes; collecting %zu complete reports automatically\n", kCompactSamples);
-    }
+#endif
 }
 
 bool Tps43TimingCapture::take_active_report_interval_request(uint16_t& interval_ms) {
@@ -295,13 +352,13 @@ bool Tps43TimingCapture::read_requested() const {
 
 void Tps43TimingCapture::print_sample_prompt() const {
     if (stage_ == Stage::OneFinger) {
-        printf("ACTION: establish exactly one stable finger, then press Enter to capture %zu reports automatically\n",
+        printf("ACTION: establish exactly one stable finger, then send capture + Enter to capture %zu reports automatically\n",
             kCompactSamples);
     } else if (stage_ == Stage::TwoFinger) {
-        printf("ACTION: establish exactly two stable fingers, then press Enter to capture %zu reports automatically\n",
+        printf("ACTION: establish exactly two stable fingers, then send capture + Enter to capture %zu reports automatically\n",
             kCompactSamples);
     } else if (stage_ == Stage::Contact) {
-        printf("ACTION: establish exactly three stable fingers, then press Enter to capture %zu reports automatically\n",
+        printf("ACTION: establish exactly three stable fingers, then send capture + Enter to capture %zu reports automatically\n",
             kContactSamples);
     }
 }

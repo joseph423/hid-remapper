@@ -61,6 +61,11 @@ add_executable(remapper
 set(TPS43_NORMAL_CAPTURE_TRACE_CAPACITY "1" CACHE STRING "Retained normal-capture rows per source")
 target_compile_definitions(remapper PRIVATE TPS43_NORMAL_CAPTURE_TRACE_CAPACITY=${TPS43_NORMAL_CAPTURE_TRACE_CAPACITY})
 
+option(TPS43_ENABLE_SERIAL_RATE_OVERRIDE "Enable diagnostic-only `rate right 8|13` serial commands" OFF)
+if(TPS43_ENABLE_SERIAL_RATE_OVERRIDE)
+target_compile_definitions(remapper PRIVATE TPS43_ENABLE_SERIAL_RATE_OVERRIDE=1)
+endif()
+
 option(TPS43_PRINT_STATS "Print generic Remapper performance statistics on the CDC serial stream" OFF)
 if(TPS43_PRINT_STATS)
 target_compile_definitions(remapper PRIVATE TPS43_PRINT_STATS=1)

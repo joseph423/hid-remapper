@@ -7,7 +7,6 @@
 
 #include "tps43_driver.h"
 
-constexpr uint16_t kTps43SevenMsActiveReportIntervalMs = 7;
 constexpr uint16_t kTps43DefaultActiveReportIntervalMs = 8;
 constexpr uint16_t kTps43BaselineActiveReportIntervalMs = 13;
 
@@ -57,7 +56,7 @@ class Tps43Iqs5xxDriver final : public Tps43Driver {
     void request_forced_read(bool diagnose_contact_mismatch = false);
 
     // Requests a volatile report-interval change for the diagnostic profile.
-    // Only the 8 ms test interval and the 13 ms baseline are accepted.
+    // Only the 8 ms default and the 13 ms diagnostic baseline are accepted.
     bool request_active_report_interval(uint16_t interval_ms);
 
     // Returns the latest complete acquisition without changing it.

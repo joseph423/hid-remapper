@@ -94,6 +94,19 @@ target_compile_definitions(tps43_capture_commands_test PRIVATE TPS43_NORMAL_CAPT
 target_include_directories(tps43_capture_commands_test PRIVATE fake_pico ../src)
 add_test(NAME tps43_capture_commands_test COMMAND tps43_capture_commands_test)
 
+add_executable(tps43_capture_commands_rate_test
+    tps43_capture_commands_test.cc
+    ../src/tps43_timing_capture.cc
+    ../src/tps43_timing_metrics.cc
+)
+target_compile_features(tps43_capture_commands_rate_test PRIVATE cxx_std_17)
+target_compile_options(tps43_capture_commands_rate_test PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(tps43_capture_commands_rate_test PRIVATE
+    TPS43_NORMAL_CAPTURE_TRACE_CAPACITY=512
+    TPS43_ENABLE_SERIAL_RATE_OVERRIDE=1)
+target_include_directories(tps43_capture_commands_rate_test PRIVATE fake_pico ../src)
+add_test(NAME tps43_capture_commands_rate_test COMMAND tps43_capture_commands_rate_test)
+
 add_executable(tps43_tuning_config_test
     tps43_tuning_config_test.cc
     ../src/tps43_tuning_config.cc

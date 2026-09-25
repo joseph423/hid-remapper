@@ -43,11 +43,11 @@ class Tps43TimingCapture final {
     // Returns whether the armed legacy contact stage needs mismatch details.
     bool diagnostic_contact_requested() const;
 
-    // Consumes non-blocking serial commands: D toggles compact-sample debug;
-    // M and Enter control the staged timing capture.
+    // Consumes bounded, line-oriented serial commands. Control or non-ASCII
+    // bytes invalidate the current line so terminal escape sequences are inert.
     void poll_serial();
 
-    // Consumes one requested 8 ms test / 13 ms restore command.
+    // Consumes one requested diagnostic report-interval change, when enabled.
     bool take_active_report_interval_request(uint16_t& interval_ms);
 
     // Returns whether the next tick should force one operator-requested read.
@@ -64,6 +64,7 @@ class Tps43TimingCapture final {
     };
 
     void print_sample_prompt() const;
+    void dispatch_serial_line();
     void finish_report_stage(uint64_t now_us);
     void request_concurrent_capture(uint64_t now_us);
     void start_concurrent_capture(uint64_t now_us, const Tps43ServiceTiming& left_timing, const Tps43ServiceTiming& right_timing);
@@ -115,6 +116,11 @@ class Tps43TimingCapture final {
     uint64_t last_manual_debug_us_ = 0;
     bool active_report_interval_request_pending_ = false;
     uint16_t requested_active_report_interval_ms_ = 0;
+    static constexpr size_t kSerialLineCapacity = 48;
+    char serial_line_[kSerialLineCapacity] = {};
+    size_t serial_line_length_ = 0;
+    bool serial_discarding_line_ = false;
+    bool serial_ignore_next_lf_ = false;
 };
 
 #endif

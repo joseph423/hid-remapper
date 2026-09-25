@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <deque>
+#include <vector>
 
 uint64_t fake_now = 100;
 namespace {
@@ -18,64 +19,122 @@ int getchar_timeout_us(uint32_t timeout_us) {
     return c;
 }
 
-// Verifies M/Enter isolation, bounded serial consumption and repeatable captures.
+// Verifies line framing, fail-closed terminal input, and opt-in commands.
 int main() {
     Tps43TimingCapture capture;
     uint16_t requested_interval_ms = 0;
-    input = { '8' };
+
+    // A bare Enter never arms a capture; commands execute only after newline.
+    input = { '\r', '\n' };
     capture.poll_serial();
-    assert(capture.take_active_report_interval_request(requested_interval_ms));
-    assert(requested_interval_ms == 8);
-    input = { '7' };
+    assert(!capture.read_requested());
+
+    // Rate changes are unavailable in normal builds and explicit in the
+    // optional diagnostic build; 7 ms is no longer accepted by the driver.
+    input = { 'r', 'a', 't', 'e', ' ', 'r', 'i', 'g', 'h', 't', ' ', '1', '3', '\n' };
     capture.poll_serial();
-    assert(capture.take_active_report_interval_request(requested_interval_ms));
-    assert(requested_interval_ms == 7);
-    input = { 'B' };
-    capture.poll_serial();
+#ifdef TPS43_ENABLE_SERIAL_RATE_OVERRIDE
     assert(capture.take_active_report_interval_request(requested_interval_ms));
     assert(requested_interval_ms == 13);
     assert(!capture.take_active_report_interval_request(requested_interval_ms));
-    input = { 'D' };
+    input = { 'r', 'a', 't', 'e', ' ', 'r', 'i', 'g', 'h', 't', ' ', '8', '\n' };
     capture.poll_serial();
-    assert(capture.manual_debug_enabled());
-    input = { 'd' };
+    assert(capture.take_active_report_interval_request(requested_interval_ms));
+    assert(requested_interval_ms == 8);
+#else
+    assert(!capture.take_active_report_interval_request(requested_interval_ms));
+#endif
+    input = { '7', '\n', '8', '\n', 'B', '\n' };
     capture.poll_serial();
-    assert(!capture.manual_debug_enabled());
+    assert(!capture.take_active_report_interval_request(requested_interval_ms));
+
+    input = { 'M' };
+    capture.poll_serial();
+    assert(!tps43_normal_capture_busy());
+    input = { '\n' };
+    capture.poll_serial();
+    assert(tps43_normal_capture_busy());
+    assert(!capture.read_requested());
+
+    // Terminal escape/mouse bytes invalidate the whole line, even when split
+    // across polls and followed by characters that are valid commands alone.
+    const std::vector<std::vector<int>> terminal_sequences = {
+        { 0x1b, '[', 'B' },
+        { 0x1b, '[', '7', '~' },
+        { 0x1b, 'O', 'B' },
+        { 0x1b, '[', '<', '0', ';', '2', ';', '3', 'M' },
+        { 0x1b, '[', '8' },
+        { 0x1b, '[', 'D' },
+        { 0x1b, '[', 'C' },
+    };
+    for (const auto& sequence : terminal_sequences) {
+        input.assign(sequence.begin(), sequence.end());
+        input.push_back('\r');
+        input.push_back('\n');
+        capture.poll_serial();
+        assert(!capture.manual_debug_enabled());
+        assert(tps43_normal_capture_busy());
+    }
+    input = { 0xc3, 'M', '\n' };
+    capture.poll_serial();
+    assert(tps43_normal_capture_busy());
+
+    // 15-second measurement remains available with an explicit command line.
+    fake_now += 16000000;
+    for (int i = 0; i < 10; ++i) {
+        capture.poll_serial();
+        fake_now += 10000;
+    }
+    assert(!tps43_normal_capture_busy());
     input = { 'm', '\r', '\n' };
     capture.poll_serial();
     assert(tps43_normal_capture_busy());
     assert(!capture.read_requested());
-    assert(!capture.diagnostic_contact_requested());
-    input.assign(100, 'x');
+
+    // Oversized lines are discarded through their delimiter and do not
+    // accidentally execute a command embedded after the buffer overflow.
+    input.assign(60, 'x');
+    input.push_back('D');
+    input.push_back('\n');
     capture.poll_serial();
-    assert(input.size() == 68);
-    input.clear();
+    while (!input.empty())
+        capture.poll_serial();
+    assert(!capture.manual_debug_enabled());
+
+    // Split command lines remain pending until completed; D executes once.
+    input = { 'D' };
+    capture.poll_serial();
+    assert(!capture.manual_debug_enabled());
+    input = { '\r', '\n' };
+    capture.poll_serial();
+    assert(capture.manual_debug_enabled());
+    input = { 'd', '\n' };
+    capture.poll_serial();
+    assert(!capture.manual_debug_enabled());
+
     fake_now += 16000000;
     for (int i = 0; i < 10; ++i) {
         capture.poll_serial();
         fake_now += 10000;
     }
-    assert(!tps43_normal_capture_busy());
-    input = { 'm' };
-    capture.poll_serial();
-    assert(tps43_normal_capture_busy() && !capture.read_requested());
-    fake_now += 16000000;
-    for (int i = 0; i < 10; ++i) {
-        capture.poll_serial();
-        fake_now += 10000;
-    }
-    input = { '\n' };
-    capture.poll_serial();
-    assert(capture.read_requested());
-    input = { 'm' };
-    capture.poll_serial();
     assert(!tps43_normal_capture_busy());
 
+    // An explicit capture line arms a staged report capture; bare Enter does not.
+    Tps43TimingCapture staged_capture;
+    input = { '\n' };
+    staged_capture.poll_serial();
+    assert(!staged_capture.read_requested());
+    input = { 'c', 'a', 'p', 't', 'u', 'r', 'e', '\n' };
+    staged_capture.poll_serial();
+    assert(staged_capture.read_requested());
+    assert(!staged_capture.diagnostic_contact_requested());
+
+    // C starts the existing Phase 11 capture; D remains an explicit toggle.
     Tps43TimingCapture phase11_capture;
-    input = { 'D' };
+    input = { 'D', '\n' };
     phase11_capture.poll_serial();
     assert(phase11_capture.manual_debug_enabled());
-    input = { 'C' };
+    input = { 'C', '\n' };
     phase11_capture.poll_serial();
     assert(phase11_capture.phase11_capture_busy());
     assert(!phase11_capture.manual_debug_enabled());

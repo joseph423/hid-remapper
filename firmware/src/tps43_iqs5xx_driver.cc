@@ -211,8 +211,7 @@ void Tps43Iqs5xxDriver::request_forced_read(bool diagnose_contact_mismatch) {
 }
 
 bool Tps43Iqs5xxDriver::request_active_report_interval(uint16_t interval_ms) {
-    if ((interval_ms != kTps43SevenMsActiveReportIntervalMs &&
-            interval_ms != kTps43DefaultActiveReportIntervalMs &&
+    if ((interval_ms != kTps43DefaultActiveReportIntervalMs &&
             interval_ms != kTps43BaselineActiveReportIntervalMs) ||
         active_rate_request_pending_ ||
         stage_ == Stage::RateWrite || stage_ == Stage::RateClose) {
@@ -311,6 +310,13 @@ Tps43Iqs5xxDriver::TransferResult Tps43Iqs5xxDriver::poll_transfer() {
 void Tps43Iqs5xxDriver::fail_acquisition(bool timeout) {
     ++timing_.transfer_failures;
     timing_.transfer_timeouts += timeout;
+    const Stage failed_stage = stage_;
+    if (failed_stage == Stage::RateWrite || failed_stage == Stage::RateClose) {
+        printf("TPS43 pad=%s active_report_interval_ms=%u result=%s failure=%s\n",
+            config_.bus == i2c0 ? "right" : "left", active_rate_in_progress_ms_,
+            failed_stage == Stage::RateClose ? "unknown" : "failed",
+            timeout ? "timeout" : "transfer");
+    }
     // Discard the partial report, retain the last published state, and perform
     // at most one bounded cleanup write after peripheral recovery.
     reset_controller();
