@@ -506,6 +506,11 @@ LogicalActions DualTps43Fsm::process_idle(const DualPadSnapshot& snapshot, bool 
     } else if (right_tap && !snapshot.left.active) {
         consume_right_session(snapshot.right);
         actions.left_button = ButtonAction::Click;
+    } else if (left_tap && !snapshot.right.active) {
+        // A Left-only tap clicks on release; prior scroll or cross-pad activity
+        // has already consumed that session and cannot create an extra click.
+        consume_left_session(snapshot.left);
+        actions.left_button = ButtonAction::Click;
     }
 
     return actions;

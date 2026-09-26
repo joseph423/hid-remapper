@@ -205,6 +205,25 @@ int main() {
         }
     });
 
+    run_case("PAD-02B Left-only tap", [] {
+        Harness harness;
+        for (int i = 0; i < 2; i++) {
+            require_no_action(harness.step(one_finger(), inactive()));
+            const LogicalActions actions = harness.step(single_tap_release(), inactive());
+            require(actions.left_button == ButtonAction::Click && actions.right_button == ButtonAction::None,
+                "each distinct Left-only tap must Left-click once");
+            require_no_action(harness.step(inactive(), inactive()));
+        }
+
+        Harness scroll;
+        require(scroll.step(one_finger(0, 2), inactive()).scroll_y == 6, "Left movement must scroll");
+        require_no_action(scroll.step(single_tap_release(), inactive()));
+
+        Harness no_tap;
+        require_no_action(no_tap.step(one_finger(), inactive()));
+        require_no_action(no_tap.step(inactive(), inactive()));
+    });
+
     run_case("PAD-03", [] {
         Harness harness;
         const LogicalActions actions = harness.step(inactive(), two_finger_move(-2, 3));
