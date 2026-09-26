@@ -58,7 +58,18 @@ std::unordered_map<uint32_t, usage_def_t> our_usages_flat;
 bool have_dpad = false;
 usage_def_t our_dpad_usage;  // only valid if have_dpad is true
 
-std::unordered_map<uint16_t, std::unordered_map<uint8_t, std::vector<usage_usage_def_t>>> their_used_usages;  // dev_addr+interface -> report_id -> (usage, usage_def) vector
+// Keep only per-configuration state here. Descriptor definitions already live in
+// their_usages, whose nodes remain stable until a descriptor change clears this cache.
+struct derived_input_usage_t {
+    uint32_t usage;
+    const usage_def_t* descriptor_usage;
+    int32_t* input_state_0;
+    int32_t* input_state_n;
+    bool should_be_scaled;
+};
+static_assert(sizeof(derived_input_usage_t) <= 20, "derived inputs must remain compact on RP2040");
+
+std::unordered_map<uint16_t, std::unordered_map<uint8_t, std::vector<derived_input_usage_t>>> their_used_usages;  // dev_addr+interface -> report_id -> derived inputs
 std::unordered_map<uint16_t, std::unordered_map<uint8_t, std::vector<uint16_t>>> array_range_state_indices;  // dev_addr+interface -> report_id -> input_state index vector
 
 std::vector<sticky_usage_t> sticky_usages;
@@ -1816,10 +1827,16 @@ void do_handle_received_report(const uint8_t* report, int len, uint16_t interfac
         }
 
         for (auto const& their : their_used_usages[interface][report_id]) {
-            if (their.usage_def.usage_maximum == 0) {
-                read_input(report, len, their.usage, their.usage_def, interface_idx);
+            if (their.descriptor_usage->usage_maximum == 0) {
+                // Materialize one descriptor at a time; the cached entry stores
+                // only the state pointers and scaling mode that differ by mapping.
+                usage_def_t usage_def = *their.descriptor_usage;
+                usage_def.input_state_0 = their.input_state_0;
+                usage_def.input_state_n = their.input_state_n;
+                usage_def.should_be_scaled = their.should_be_scaled;
+                read_input(report, len, their.usage, usage_def, interface_idx);
             } else {
-                read_input_range(report, len, their.usage, their.usage_def, interface_idx, hub_port);
+                read_input_range(report, len, their.usage, *their.descriptor_usage, interface_idx, hub_port);
             }
         }
     }
@@ -2079,6 +2096,10 @@ void clear_derived_usage_vectors(DerivedUsageMap& usage_map) {
     }
 }
 
+void invalidate_their_derived_inputs() {
+    their_used_usages.clear();
+}
+
 void update_their_descriptor_derivates(bool descriptor_changed) {
     std::vector<uint64_t> their_usage_ranges;
     if (descriptor_changed) {
@@ -2100,7 +2121,7 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
     if (descriptor_changed) {
         // A descriptor changed, so report/interface keys and their capacities
         // may no longer describe the connected device.
-        their_used_usages.clear();
+        invalidate_their_derived_inputs();
         array_range_state_indices.clear();
     } else {
         // A configuration save rebuilds pointers into the same attached-device
@@ -2118,8 +2139,8 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
             size_t required_capacity = 0;
             size_t array_range_required_capacity = 0;
             // Count the entries before appending so the first descriptor build
-            // allocates the final vector once instead of growing 32 -> 64 and
-            // requiring the old and new buffers to coexist.
+            // allocates the compact vector once instead of growing with the old
+            // and new buffers resident together.
             for (auto const& [candidate_usage, candidate_def] : usage_map) {
                 if (candidate_def.usage_maximum == 0) {
                     if ((get_state_ptr(candidate_usage, 0) != NULL) ||
@@ -2166,8 +2187,8 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                 // duplicate pointer for every overlapping usage range.
                 array_range_vector.reserve(array_range_required_capacity);
             }
-            for (auto [usage, usage_def] : usage_map) {
-                usage_def.should_be_scaled = should_scale_input(usage_def);
+            for (auto& [usage, usage_def] : usage_map) {
+                const bool should_be_scaled = should_scale_input(usage_def);
                 if (usage_def.usage_maximum == 0) {
                     int32_t* state_ptr_0 = get_state_ptr(usage, 0);
                     int32_t* state_ptr_n = get_state_ptr(usage, hub_port);
@@ -2189,20 +2210,21 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                         mark_derivative_state(binary_state_flags, state_ptr_raw_n);
                     }
                     if ((state_ptr_0 != NULL) || (state_ptr_n != NULL)) {
-                        usage_def.input_state_0 = state_ptr_0;
-                        usage_def.input_state_n = state_ptr_n;
-                        used_usages.push_back((usage_usage_def_t) {
+                        used_usages.push_back((derived_input_usage_t) {
                             .usage = usage,
-                            .usage_def = usage_def,
+                            .descriptor_usage = &usage_def,
+                            .input_state_0 = state_ptr_0,
+                            .input_state_n = state_ptr_n,
+                            .should_be_scaled = should_be_scaled,
                         });
                     }
                     if ((state_ptr_raw_0 != NULL) || (state_ptr_raw_n != NULL)) {
-                        usage_def.input_state_0 = state_ptr_raw_0;
-                        usage_def.input_state_n = state_ptr_raw_n;
-                        usage_def.should_be_scaled = false;
-                        used_usages.push_back((usage_usage_def_t) {
+                        used_usages.push_back((derived_input_usage_t) {
                             .usage = usage,
-                            .usage_def = usage_def,
+                            .descriptor_usage = &usage_def,
+                            .input_state_0 = state_ptr_raw_0,
+                            .input_state_n = state_ptr_raw_n,
+                            .should_be_scaled = false,
                         });
                     }
                 } else {  // usage_maximum != 0, array range usage
@@ -2223,9 +2245,9 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
                         }
                     }
                     if (any_used) {
-                        used_usages.push_back((usage_usage_def_t) {
+                        used_usages.push_back((derived_input_usage_t) {
                             .usage = usage,
-                            .usage_def = usage_def,
+                            .descriptor_usage = &usage_def,
                         });
                     }
                 }
@@ -2279,8 +2301,8 @@ void update_their_descriptor_derivates(bool descriptor_changed) {
     for (auto& [interface, report_id_usages_map] : their_used_usages) {
         for (auto& [report_id, usages_vector] : report_id_usages_map) {
             std::sort(usages_vector.begin(), usages_vector.end(),
-                [](const usage_usage_def_t& a, const usage_usage_def_t& b) {
-                    return (a.usage_def.is_array < b.usage_def.is_array);
+                [](const derived_input_usage_t& a, const derived_input_usage_t& b) {
+                    return (a.descriptor_usage->is_array < b.descriptor_usage->is_array);
                 });
         }
     }
@@ -2291,6 +2313,7 @@ void parse_our_descriptor() {
 
     our_usages.clear();
     our_usages_rle.clear();
+    invalidate_their_derived_inputs();
     their_usages.erase(OUR_OUT_INTERFACE);
     has_report_id_theirs.erase(OUR_OUT_INTERFACE);
     our_usages_flat.clear();

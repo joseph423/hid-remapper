@@ -20,7 +20,7 @@ DualTps43Tuning phase5_behavior_tuning() {
     tuning.neutral_activation_threshold = 5;
     tuning.cursor_base_scale_q8 = 512;
     tuning.scroll_base_scale_q8 = 768;
-    tuning.scroll_momentum = { 256, 0, 0, 0 };
+    tuning.scroll_momentum = { false, 50, 100 };
     tuning.left_assisted_drag_axis_threshold = 2;
     return tuning;
 }
@@ -32,7 +32,7 @@ DualTps43Tuning production_behavior_tuning() {
     tuning.neutral_activation_threshold = 20;
     tuning.cursor_base_scale_q8 = 128;
     tuning.scroll_base_scale_q8 = 4;
-    tuning.scroll_momentum = { 0, 0, 0, 0 };
+    tuning.scroll_momentum = { false, 50, 100 };
     tuning.left_assisted_drag_axis_threshold = 2;
     return tuning;
 }

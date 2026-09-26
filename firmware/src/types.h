@@ -43,6 +43,8 @@ enum class ConfigCommand : int8_t {
     SET_TPS43_POWER_MODE_TIMEOUTS = 34,
     GET_TPS43_SCROLL_DIRECTION = 35,
     SET_TPS43_SCROLL_DIRECTION = 36,
+    GET_TPS43_SCROLL_MOMENTUM = 37,
+    SET_TPS43_SCROLL_MOMENTUM = 38,
 };
 
 struct usage_def_t {
@@ -368,7 +370,11 @@ struct __attribute__((packed)) persist_config_v27_t {
     uint8_t tps43_tuning[105];
 };
 
-typedef persist_config_v27_t persist_config_t;
+struct __attribute__((packed)) persist_config_v28_t {
+    persist_config_v18_t base;
+    uint8_t tps43_tuning[110];
+};
+typedef persist_config_v28_t persist_config_t;
 
 struct __attribute__((packed)) get_config_t {
     uint8_t version;
@@ -459,6 +465,12 @@ struct __attribute__((packed)) tps43_scroll_direction_tuning_t {
 static_assert(sizeof(tps43_power_mode_timeouts_t) == 2);
 static_assert(sizeof(tps43_scroll_gain_tuning_t) == 9);
 static_assert(sizeof(tps43_scroll_direction_tuning_t) == 3);
+struct __attribute__((packed)) tps43_scroll_momentum_tuning_t {
+    uint8_t enabled;
+    uint16_t launch_strength_percent;
+    uint16_t half_life_ms;
+};
+static_assert(sizeof(tps43_scroll_momentum_tuning_t) == 5);
 
 struct __attribute__((packed)) get_indexed_t {
     uint32_t requested_index;

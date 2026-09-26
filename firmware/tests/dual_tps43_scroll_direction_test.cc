@@ -17,7 +17,7 @@ DualTps43Tuning test_tuning() {
     tuning.neutral_activation_threshold = 20;
     tuning.cursor_base_scale_q8 = 128;
     tuning.scroll_base_scale_q8 = 256;
-    tuning.scroll_momentum = { 0, 0, 0, 0 };
+    tuning.scroll_momentum = { false, 50, 100 };
     return tuning;
 }
 

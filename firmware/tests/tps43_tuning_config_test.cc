@@ -12,12 +12,9 @@ void assert_equal(const DualTps43Tuning& expected, const DualTps43Tuning& actual
     assert(expected.left_assisted_drag_axis_threshold == actual.left_assisted_drag_axis_threshold);
     assert(expected.cursor_base_scale_q8 == actual.cursor_base_scale_q8);
     assert(expected.scroll_base_scale_q8 == actual.scroll_base_scale_q8);
-    assert(expected.scroll_momentum.release_velocity_filter_weight_q8 ==
-           actual.scroll_momentum.release_velocity_filter_weight_q8);
-    assert(expected.scroll_momentum.launch_gain_q8 == actual.scroll_momentum.launch_gain_q8);
-    assert(expected.scroll_momentum.decay_q8 == actual.scroll_momentum.decay_q8);
-    assert(expected.scroll_momentum.stop_velocity_logical_units_per_second ==
-           actual.scroll_momentum.stop_velocity_logical_units_per_second);
+    assert(expected.scroll_momentum.enabled == actual.scroll_momentum.enabled);
+    assert(expected.scroll_momentum.launch_strength_percent == actual.scroll_momentum.launch_strength_percent);
+    assert(expected.scroll_momentum.half_life_ms == actual.scroll_momentum.half_life_ms);
     assert(expected.subthreshold_cursor_expiry_us == actual.subthreshold_cursor_expiry_us);
     assert(expected.subthreshold_cursor_threshold == actual.subthreshold_cursor_threshold);
     assert(expected.cursor_temporal_filter_enabled == actual.cursor_temporal_filter_enabled);
@@ -84,6 +81,25 @@ int main() {
     DualTps43Tuning decoded = {};
     assert(decode_tps43_tuning(buffer, sizeof(buffer), &decoded));
     assert_equal(defaults, decoded);
+
+    DualTps43Tuning momentum_config = defaults;
+    momentum_config.scroll_momentum = { true, 75, 150 };
+    assert(encode_tps43_tuning(momentum_config, buffer, sizeof(buffer)));
+    assert(decode_tps43_tuning(buffer, sizeof(buffer), &decoded));
+    assert_equal(momentum_config, decoded);
+    // The v8 layout has the same first 105 bytes; older momentum coefficients
+    // are intentionally migrated to disabled elapsed-time momentum.
+    uint8_t legacy_v8[kTps43TuningBlockV8Size] = {};
+    for (std::size_t i = 0; i < sizeof(legacy_v8); ++i) legacy_v8[i] = buffer[i];
+    legacy_v8[4] = 8;
+    legacy_v8[6] = static_cast<uint8_t>(sizeof(legacy_v8));
+    legacy_v8[7] = 0;
+    assert(decode_tps43_tuning(legacy_v8, sizeof(legacy_v8), &decoded));
+    assert(!decoded.scroll_momentum.enabled);
+    assert(decoded.scroll_momentum.launch_strength_percent == 50);
+    assert(decoded.scroll_momentum.half_life_ms == 100);
+    assert(decoded.cursor_base_scale_q8 == momentum_config.cursor_base_scale_q8);
+    assert(encode_tps43_tuning(defaults, buffer, sizeof(buffer)));
 
     DualTps43Tuning scroll_gain_config = defaults;
     scroll_gain_config.active_scroll_gain = { true, 300, 1500, 250, 40 };
@@ -244,8 +260,7 @@ int main() {
     invalid.cursor_base_scale_q8 = -1;
     assert(!validate_tps43_tuning(invalid));
     invalid = defaults;
-    invalid.scroll_momentum.decay_q8 = 256;
-    invalid.scroll_momentum.stop_velocity_logical_units_per_second = 1;
+    invalid.scroll_momentum.half_life_ms = 0;
     assert(!validate_tps43_tuning(invalid));
     assert(!encode_tps43_tuning(invalid, buffer, sizeof(buffer)));
     invalid = defaults;
@@ -298,7 +313,19 @@ int main() {
     assert(updated.scroll_base_scale_q8 == 8);
     assert(updated.subthreshold_cursor_expiry_us == 125000);
     assert(updated.subthreshold_cursor_threshold == 4);
-    assert(updated.scroll_momentum.release_velocity_filter_weight_q8 == 0);
+    assert(!updated.scroll_momentum.enabled);
+
+    tps43_scroll_momentum_tuning_t momentum_controls = {};
+    assert(get_configured_tps43_scroll_momentum(&momentum_controls));
+    assert(momentum_controls.enabled == 0 && momentum_controls.launch_strength_percent == 50 &&
+           momentum_controls.half_life_ms == 100);
+    assert(set_configured_tps43_scroll_momentum({ 1, 75, 150 }));
+    assert(get_configured_tps43_scroll_momentum(&momentum_controls));
+    assert(momentum_controls.enabled == 1 && momentum_controls.launch_strength_percent == 75 &&
+           momentum_controls.half_life_ms == 150);
+    assert(!set_configured_tps43_scroll_momentum({ 2, 50, 100 }));
+    assert(!set_configured_tps43_scroll_momentum({ 1, 101, 100 }));
+    assert(!set_configured_tps43_scroll_momentum({ 1, 50, 0 }));
 
     tps43_scroll_gain_tuning_t scroll_gain = {};
     assert(get_configured_tps43_scroll_gain(&scroll_gain));

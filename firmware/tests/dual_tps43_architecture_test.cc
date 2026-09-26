@@ -167,7 +167,7 @@ DualTps43Tuning acquisition_tuning() {
     tuning.neutral_activation_threshold = 5;
     tuning.cursor_base_scale_q8 = 256;
     tuning.scroll_base_scale_q8 = 768;
-    tuning.scroll_momentum = { 256, 256, 192, 100 };
+    tuning.scroll_momentum = { true, 50, 100 };
     return tuning;
 }
 
@@ -367,7 +367,7 @@ void verify_scroll_gaps_and_stationary_intent() {
             require(harness.tick(30000).scroll_y == 0, "stationary or missing acquisition must emit no active scroll");
             driver.set_next_sample(compact_sample(false, 0, 0, 0, 40000));
             require(harness.tick(40000).scroll_y == 0, "release must not replay scroll");
-            require(harness.tick(50000).scroll_y == (stationary ? 0 : 45),
+            require((harness.tick(50000).scroll_y > 0) != stationary,
                 "only a fresh stationary sample may clear release velocity; momentum must run without acquisitions");
         }
     }

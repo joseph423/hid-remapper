@@ -18,8 +18,9 @@ constexpr std::size_t kTps43TuningBlockV4Size = 85;
 constexpr std::size_t kTps43TuningBlockV5Size = 91;
 constexpr std::size_t kTps43TuningBlockV6Size = 100;
 constexpr std::size_t kTps43TuningBlockV7Size = 102;
-constexpr std::size_t kTps43TuningBlockSize = 105;
-constexpr uint8_t kTps43TuningBlockVersion = 8;
+constexpr std::size_t kTps43TuningBlockV8Size = 105;
+constexpr std::size_t kTps43TuningBlockSize = 110;
+constexpr uint8_t kTps43TuningBlockVersion = 9;
 
 // Returns the approved production defaults used by the current physical
 // profile. The returned value is independent of persisted configuration.
@@ -66,6 +67,10 @@ bool set_configured_tps43_cursor_filter(const tps43_cursor_filter_tuning_t& cont
 // Reads/writes the isolated active-scroll speed-gain A/B settings.
 bool get_configured_tps43_scroll_gain(tps43_scroll_gain_tuning_t* controls);
 bool set_configured_tps43_scroll_gain(const tps43_scroll_gain_tuning_t& controls);
+
+// Reads/writes the three post-release momentum controls.
+bool get_configured_tps43_scroll_momentum(tps43_scroll_momentum_tuning_t* controls);
+bool set_configured_tps43_scroll_momentum(const tps43_scroll_momentum_tuning_t& controls);
 
 // Gets/sets the persistent IQS572 mode timeouts. LP1 uses 20-second units;
 // register value 255 is reserved for "never" and is not exposed by this API.

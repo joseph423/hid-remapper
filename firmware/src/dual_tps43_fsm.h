@@ -47,18 +47,12 @@ struct LogicalActions {
     ButtonAction right_button = ButtonAction::None;
 };
 
-// Configures post-release scroll momentum. Velocity uses logical output units
-// per second in Q8 fixed point. Q8 filter, launch, and decay coefficients use
-// 256 as 1.0; decay must be below 256 for momentum to reach the cutoff.
+// Configures post-release scroll momentum. The three controls are persisted;
+// filtering, expiry, gap cancellation, and stop limits remain internal.
 struct ScrollMomentumTuning {
-    // Current scaled-scroll velocity sample weight in Q8.
-    uint16_t release_velocity_filter_weight_q8;
-    // Multiplier applied to filtered release velocity, in Q8.
-    uint16_t launch_gain_q8;
-    // Velocity retained after each processing cycle, in Q8.
-    uint16_t decay_q8;
-    // Logical output units per second below which momentum stops.
-    uint32_t stop_velocity_logical_units_per_second;
+    bool enabled = false;
+    uint16_t launch_strength_percent = 50;
+    uint16_t half_life_ms = 100;
 };
 
 // Optional active-scroll response curve. Speed is measured from normalized
@@ -204,11 +198,16 @@ class DualTps43Fsm : public DualPadProcessor {
         ScrollSource source = ScrollSource::None;
         int64_t filtered_velocity_x_q8_per_second = 0;
         int64_t filtered_velocity_y_q8_per_second = 0;
+        uint64_t last_velocity_sample_us = 0;
         bool momentum_active = false;
         int64_t momentum_velocity_x_q8_per_second = 0;
         int64_t momentum_velocity_y_q8_per_second = 0;
-        int64_t momentum_residual_x_q8 = 0;
-        int64_t momentum_residual_y_q8 = 0;
+        // Q32 displacement retains sub-Q8 movement until it reaches HID output.
+        int64_t momentum_residual_x_q32 = 0;
+        int64_t momentum_residual_y_q32 = 0;
+        int64_t momentum_projection_x_q8 = 0;
+        int64_t momentum_projection_y_q8 = 0;
+        uint64_t momentum_started_us = 0;
         uint64_t momentum_timestamp_us = 0;
     };
 
@@ -261,7 +260,7 @@ class DualTps43Fsm : public DualPadProcessor {
         MotionScaleState& state,
         uint16_t gain_percent) const;
     void stop_cursor_motion();
-    void update_scroll_release_velocity(const ScaledDelta& delta);
+    void update_scroll_release_velocity(const ScaledDelta& delta, uint64_t now_us);
     void start_scroll_momentum(uint64_t now_us);
     void apply_scroll_momentum(uint64_t now_us, LogicalActions& actions);
     void stop_scroll_momentum();

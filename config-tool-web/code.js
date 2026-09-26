@@ -8,7 +8,7 @@ const STICKY_FLAG = 1 << 0;
 const TAP_FLAG = 1 << 1;
 const HOLD_FLAG = 1 << 2;
 const CONFIG_SIZE = 32;
-const CONFIG_VERSION = 27;
+const CONFIG_VERSION = 28;
 const VENDOR_ID = 0xCAFE;
 const PRODUCT_ID = 0xBAF2;
 const DEFAULT_PARTIAL_SCROLL_TIMEOUT = 1000000;
@@ -41,6 +41,9 @@ const DEFAULT_TPS43_TUNING = {
     'scroll_direction_classification_enabled': true,
     'scroll_direction_classification_distance_counts': 8,
     'scroll_direction_axis_dominance_ratio': 2,
+    'scroll_momentum_enabled': false,
+    'scroll_momentum_launch_strength_percent': 50,
+    'scroll_momentum_half_life_ms': 100,
 };
 
 const NLAYERS = 8;
@@ -97,6 +100,8 @@ const GET_TPS43_POWER_MODE_TIMEOUTS = 33;
 const SET_TPS43_POWER_MODE_TIMEOUTS = 34;
 const GET_TPS43_SCROLL_DIRECTION = 35;
 const SET_TPS43_SCROLL_DIRECTION = 36;
+const GET_TPS43_SCROLL_MOMENTUM = 37;
+const SET_TPS43_SCROLL_MOMENTUM = 38;
 
 const PERSIST_CONFIG_SUCCESS = 1;
 const PERSIST_CONFIG_CONFIG_TOO_BIG = 2;
@@ -244,6 +249,10 @@ document.addEventListener("DOMContentLoaded", function () {
     document.getElementById("tps43_scroll_base_scale_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_idle_timeout_before_lp1_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_lp1_timeout_before_lp2_input").addEventListener("change", tps43_tuning_onchange);
+    for (const id of ["tps43_scroll_momentum_enabled", "tps43_scroll_momentum_launch_strength",
+        "tps43_scroll_momentum_half_life"]) {
+        document.getElementById(id).addEventListener("change", tps43_tuning_onchange);
+    }
     document.getElementById("tps43_scroll_direction_enabled").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_scroll_direction_distance").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_scroll_direction_ratio").addEventListener("change", tps43_tuning_onchange);
@@ -425,6 +434,17 @@ async function load_from_device() {
         config['tps43_tuning']['scroll_direction_classification_distance_counts'] =
             scroll_direction_classification_distance_counts;
         config['tps43_tuning']['scroll_direction_axis_dominance_ratio'] = scroll_direction_axis_dominance_ratio;
+
+        await send_feature_command(GET_TPS43_SCROLL_MOMENTUM);
+        const [scroll_momentum_enabled, scroll_momentum_launch_strength_percent,
+            scroll_momentum_half_life_ms] = await read_config_feature([UINT8, UINT16, UINT16]);
+        if (scroll_momentum_enabled > 1 || scroll_momentum_launch_strength_percent > 100 ||
+            scroll_momentum_half_life_ms < 10 || scroll_momentum_half_life_ms > 1000) {
+            throw new Error('Invalid scroll momentum readback from firmware. Check that the updated UF2 is flashed.');
+        }
+        config['tps43_tuning']['scroll_momentum_enabled'] = !!scroll_momentum_enabled;
+        config['tps43_tuning']['scroll_momentum_launch_strength_percent'] = scroll_momentum_launch_strength_percent;
+        config['tps43_tuning']['scroll_momentum_half_life_ms'] = scroll_momentum_half_life_ms;
 
         for (let i = 0; i < mapping_count; i++) {
             await send_feature_command(GET_MAPPING, [[UINT32, i]]);
@@ -608,6 +628,14 @@ async function save_to_device() {
                 throw new Error('Active scroll gain must be between 0 and 300% of the base scale.');
             }
         }
+        if (!Number.isInteger(tps43_tuning['scroll_momentum_launch_strength_percent']) ||
+            tps43_tuning['scroll_momentum_launch_strength_percent'] < 0 ||
+            tps43_tuning['scroll_momentum_launch_strength_percent'] > 100 ||
+            !Number.isInteger(tps43_tuning['scroll_momentum_half_life_ms']) ||
+            tps43_tuning['scroll_momentum_half_life_ms'] < 10 ||
+            tps43_tuning['scroll_momentum_half_life_ms'] > 1000) {
+            throw new Error('Momentum strength must be 0–100% and half-life 10–1,000 ms.');
+        }
         await send_feature_command(SUSPEND);
         const flags = (config['ignore_auth_dev_inputs'] ? IGNORE_AUTH_DEV_INPUTS_FLAG : 0) |
             (config['gpio_output_mode'] ? GPIO_OUTPUT_MODE_FLAG : 0) |
@@ -660,6 +688,11 @@ async function save_to_device() {
             [UINT8, tps43_tuning['scroll_direction_classification_enabled'] ? 1 : 0],
             [UINT8, tps43_tuning['scroll_direction_classification_distance_counts']],
             [UINT8, tps43_tuning['scroll_direction_axis_dominance_ratio']],
+        ]);
+        await send_feature_command(SET_TPS43_SCROLL_MOMENTUM, [
+            [UINT8, tps43_tuning['scroll_momentum_enabled'] ? 1 : 0],
+            [UINT16, tps43_tuning['scroll_momentum_launch_strength_percent']],
+            [UINT16, tps43_tuning['scroll_momentum_half_life_ms']],
         ]);
         await send_feature_command(CLEAR_MAPPING);
 
@@ -851,6 +884,10 @@ function set_config_ui_state() {
         tps43_tuning['idle_timeout_before_lp1_seconds'];
     document.getElementById('tps43_lp1_timeout_before_lp2_input').value =
         tps43_tuning['lp1_timeout_before_lp2_seconds'];
+    document.getElementById('tps43_scroll_momentum_enabled').checked = tps43_tuning['scroll_momentum_enabled'];
+    document.getElementById('tps43_scroll_momentum_launch_strength').value =
+        tps43_tuning['scroll_momentum_launch_strength_percent'];
+    document.getElementById('tps43_scroll_momentum_half_life').value = tps43_tuning['scroll_momentum_half_life_ms'];
     document.getElementById('tps43_scroll_direction_enabled').checked =
         tps43_tuning['scroll_direction_classification_enabled'];
     document.getElementById('tps43_scroll_direction_distance').value =
@@ -1065,6 +1102,10 @@ function set_ui_state() {
         if (config['tps43_tuning'][key] === undefined) {
             config['tps43_tuning'][key] = DEFAULT_TPS43_TUNING[key];
         }
+    }
+    for (const key of ['scroll_momentum_enabled', 'scroll_momentum_launch_strength_percent',
+        'scroll_momentum_half_life_ms']) {
+        if (config['tps43_tuning'][key] === undefined) config['tps43_tuning'][key] = DEFAULT_TPS43_TUNING[key];
     }
     delete config['tps43_tuning']['cursor_temporal_filter_previous_weight_percent'];
     if (config['version'] < CONFIG_VERSION) {
@@ -1308,7 +1349,7 @@ async function check_device_version() {
     // device because it could be version X, ignore our GET_CONFIG call with version Y and
     // just happen to have Y at the right place in the buffer from some previous call done
     // by some other software.
-    for (const version of [CONFIG_VERSION, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
+    for (const version of [CONFIG_VERSION, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
         await send_feature_command(GET_CONFIG, [], version);
         const [received_version] = await read_config_feature([UINT8]);
         if (received_version == version) {
@@ -1715,6 +1756,8 @@ function tps43_tuning_onchange() {
         ['active_scroll_fast_gain_percent', 'tps43_active_scroll_fast_gain', 0, 300],
         ['scroll_direction_classification_distance_counts', 'tps43_scroll_direction_distance', 1, 255],
         ['scroll_direction_axis_dominance_ratio', 'tps43_scroll_direction_ratio', 2, 255],
+        ['scroll_momentum_launch_strength_percent', 'tps43_scroll_momentum_launch_strength', 0, 100],
+        ['scroll_momentum_half_life_ms', 'tps43_scroll_momentum_half_life', 10, 1000],
     ];
     for (const [key, element_id, minimum, maximum] of fields) {
         let value = parseInt(document.getElementById(element_id).value, 10);
@@ -1734,6 +1777,8 @@ function tps43_tuning_onchange() {
         document.getElementById('tps43_cursor_temporal_filter_enabled').checked;
     config['tps43_tuning']['active_scroll_speed_gain_enabled'] =
         document.getElementById('tps43_active_scroll_speed_gain_enabled').checked;
+    config['tps43_tuning']['scroll_momentum_enabled'] =
+        document.getElementById('tps43_scroll_momentum_enabled').checked;
     config['tps43_tuning']['scroll_direction_classification_enabled'] =
         document.getElementById('tps43_scroll_direction_enabled').checked;
 }

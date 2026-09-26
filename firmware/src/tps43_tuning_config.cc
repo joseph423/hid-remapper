@@ -49,13 +49,8 @@ int32_t read_i32(const uint8_t* buffer) {
 }
 
 bool validate_momentum(const ScrollMomentumTuning& momentum) {
-    const bool disabled = momentum.release_velocity_filter_weight_q8 == 0 && momentum.launch_gain_q8 == 0 &&
-                          momentum.decay_q8 == 0 && momentum.stop_velocity_logical_units_per_second == 0;
-    if (disabled) {
-        return true;
-    }
-    return momentum.release_velocity_filter_weight_q8 <= 256 && momentum.launch_gain_q8 <= 256 &&
-           momentum.decay_q8 < 256 && momentum.stop_velocity_logical_units_per_second > 0;
+    return momentum.launch_strength_percent <= 100 && momentum.half_life_ms >= 10 &&
+           momentum.half_life_ms <= 1000;
 }
 
 DualTps43Tuning& configured_tuning_storage() {
@@ -98,7 +93,7 @@ DualTps43Tuning production_tuning() {
     tuning.scroll_base_scale_q8 = 4;
     tuning.active_scroll_gain = { false, 200, 1000, 200, 50 };
     tuning.scroll_direction_classification = { true, 8, 2 };
-    tuning.scroll_momentum = { 0, 0, 0, 0 };
+    tuning.scroll_momentum = { false, 50, 100 };
     tuning.left_assisted_drag_axis_threshold = 2;
     tuning.subthreshold_cursor_expiry_us = 50000;
     tuning.subthreshold_cursor_threshold = 2;
@@ -169,14 +164,9 @@ bool encode_tps43_tuning(const DualTps43Tuning& tuning, uint8_t* buffer, std::si
     cursor += 4;
     encode_scale_compat_record(cursor, tuning.cursor_base_scale_q8);
     encode_scale_compat_record(cursor, tuning.scroll_base_scale_q8);
-    write_u16(cursor, tuning.scroll_momentum.release_velocity_filter_weight_q8);
-    cursor += 2;
-    write_u16(cursor, tuning.scroll_momentum.launch_gain_q8);
-    cursor += 2;
-    write_u16(cursor, tuning.scroll_momentum.decay_q8);
-    cursor += 2;
-    write_u32(cursor, tuning.scroll_momentum.stop_velocity_logical_units_per_second);
-    cursor += 4;
+    // Retain the historical 10-byte slot so the rest of the persisted layout
+    // stays stable; v9 settings live in the appended record.
+    for (int i = 0; i < 10; ++i) *cursor++ = 0;
     write_i32(cursor, tuning.left_assisted_drag_axis_threshold);
     cursor += 4;
     write_u32(cursor, tuning.subthreshold_cursor_expiry_us);
@@ -204,6 +194,11 @@ bool encode_tps43_tuning(const DualTps43Tuning& tuning, uint8_t* buffer, std::si
     *cursor++ = tuning.scroll_direction_classification.enabled ? 1 : 0;
     *cursor++ = tuning.scroll_direction_classification.classification_distance_counts;
     *cursor++ = tuning.scroll_direction_classification.axis_dominance_ratio;
+    *cursor++ = tuning.scroll_momentum.enabled ? 1 : 0;
+    write_u16(cursor, tuning.scroll_momentum.launch_strength_percent);
+    cursor += 2;
+    write_u16(cursor, tuning.scroll_momentum.half_life_ms);
+    cursor += 2;
     return static_cast<std::size_t>(cursor - buffer) == kTps43TuningBlockSize;
 }
 
@@ -229,10 +224,11 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
                            block_size == kTps43TuningBlockV6Size && buffer_size >= kTps43TuningBlockV6Size;
     const bool legacy_v7 = block_version == 7 && block_size == kTps43TuningBlockV7Size &&
                            buffer_size >= kTps43TuningBlockV7Size;
-    const bool current_v8 = block_version == kTps43TuningBlockVersion && block_size == kTps43TuningBlockSize &&
+    const bool legacy_v8 = block_version == 8 && block_size == kTps43TuningBlockV8Size &&
+                           buffer_size >= kTps43TuningBlockV8Size;
+    const bool current_v9 = block_version == kTps43TuningBlockVersion && block_size == kTps43TuningBlockSize &&
                             buffer_size >= kTps43TuningBlockSize;
-    if (!legacy_v1 && !legacy_v2 && !legacy_v3 && !legacy_v4 && !legacy_v5 && !legacy_v6 && !legacy_v7 &&
-        !current_v8) {
+    if (!legacy_v1 && !legacy_v2 && !legacy_v3 && !legacy_v4 && !legacy_v5 && !legacy_v6 && !legacy_v7 && !legacy_v8 && !current_v9) {
         return false;
     }
 
@@ -246,31 +242,26 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
     cursor += 4;
     decoded.cursor_base_scale_q8 = decode_scale_compat_record(cursor);
     decoded.scroll_base_scale_q8 = decode_scale_compat_record(cursor);
-    decoded.scroll_momentum.release_velocity_filter_weight_q8 = read_u16(cursor);
-    cursor += 2;
-    decoded.scroll_momentum.launch_gain_q8 = read_u16(cursor);
-    cursor += 2;
-    decoded.scroll_momentum.decay_q8 = read_u16(cursor);
-    cursor += 2;
-    decoded.scroll_momentum.stop_velocity_logical_units_per_second = read_u32(cursor);
-    cursor += 4;
+    // Older experimental momentum values do not map to elapsed-time controls.
+    // Migration leaves momentum disabled while preserving all other settings.
+    cursor += 10;
     decoded.left_assisted_drag_axis_threshold = read_i32(cursor);
     cursor += 4;
-    if (legacy_v2 || legacy_v3 || legacy_v4 || legacy_v5 || legacy_v6 || legacy_v7 || current_v8) {
+    if (legacy_v2 || legacy_v3 || legacy_v4 || legacy_v5 || legacy_v6 || legacy_v7 || legacy_v8 || current_v9) {
         decoded.subthreshold_cursor_expiry_us = read_u32(cursor);
         cursor += 4;
     }
-    if (legacy_v3 || legacy_v4 || legacy_v5 || legacy_v6 || legacy_v7 || current_v8) {
+    if (legacy_v3 || legacy_v4 || legacy_v5 || legacy_v6 || legacy_v7 || legacy_v8 || current_v9) {
         decoded.subthreshold_cursor_threshold = *cursor;
         cursor++;
     }
-    if (legacy_v4 || legacy_v5 || legacy_v6 || legacy_v7 || current_v8) {
+    if (legacy_v4 || legacy_v5 || legacy_v6 || legacy_v7 || legacy_v8 || current_v9) {
         if (*cursor > 1) {
             return false;
         }
         decoded.cursor_temporal_filter_enabled = *cursor++ != 0;
         decoded.cursor_filter_slow_weight_percent = *cursor++;
-        if (legacy_v5 || legacy_v6 || legacy_v7 || current_v8) {
+        if (legacy_v5 || legacy_v6 || legacy_v7 || legacy_v8 || current_v9) {
             decoded.cursor_filter_slow_speed_limit_counts_per_second = read_u16(cursor);
             cursor += 2;
             decoded.cursor_filter_fast_speed_limit_counts_per_second = read_u16(cursor);
@@ -286,7 +277,7 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
         }
     }
 
-    if (legacy_v6 || legacy_v7 || current_v8) {
+    if (legacy_v6 || legacy_v7 || legacy_v8 || current_v9) {
         if (*cursor > 1) {
             return false;
         }
@@ -300,17 +291,25 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
         decoded.active_scroll_gain.fast_gain_percent = read_u16(cursor);
         cursor += 2;
     }
-    if (legacy_v7 || current_v8) {
+    if (legacy_v7 || legacy_v8 || current_v9) {
         decoded.idle_timeout_before_lp1_seconds = *cursor++;
         decoded.lp1_timeout_before_lp2_20s_units = *cursor++;
     }
-    if (current_v8) {
+    if (legacy_v8 || current_v9) {
         if (*cursor > 1) {
             return false;
         }
         decoded.scroll_direction_classification.enabled = *cursor++ != 0;
         decoded.scroll_direction_classification.classification_distance_counts = *cursor++;
         decoded.scroll_direction_classification.axis_dominance_ratio = *cursor++;
+    }
+    if (current_v9) {
+        if (*cursor > 1) return false;
+        decoded.scroll_momentum.enabled = *cursor++ != 0;
+        decoded.scroll_momentum.launch_strength_percent = read_u16(cursor);
+        cursor += 2;
+        decoded.scroll_momentum.half_life_ms = read_u16(cursor);
+        cursor += 2;
     }
 
     if (!validate_tps43_tuning(decoded)) {
@@ -489,6 +488,24 @@ bool set_configured_tps43_scroll_direction(const tps43_scroll_direction_tuning_t
     if (!validate_tps43_tuning(candidate)) {
         return false;
     }
+    set_configured_tps43_tuning(candidate);
+    return true;
+}
+
+bool get_configured_tps43_scroll_momentum(tps43_scroll_momentum_tuning_t* controls) {
+    if (controls == nullptr) return false;
+    const auto momentum = configured_tps43_tuning().scroll_momentum;
+    controls->enabled = momentum.enabled ? 1 : 0;
+    controls->launch_strength_percent = momentum.launch_strength_percent;
+    controls->half_life_ms = momentum.half_life_ms;
+    return true;
+}
+
+bool set_configured_tps43_scroll_momentum(const tps43_scroll_momentum_tuning_t& controls) {
+    if (controls.enabled > 1) return false;
+    auto candidate = configured_tps43_tuning();
+    candidate.scroll_momentum = { controls.enabled != 0, controls.launch_strength_percent, controls.half_life_ms };
+    if (!validate_tps43_tuning(candidate)) return false;
     set_configured_tps43_tuning(candidate);
     return true;
 }

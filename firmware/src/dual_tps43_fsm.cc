@@ -1,12 +1,22 @@
 #include "dual_tps43_fsm.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 
 namespace {
 
 constexpr uint32_t kFallbackMotionSampleIntervalUs = 15000;
+// Release samples older than 100 ms cannot represent the lift velocity.
+constexpr uint64_t kReleaseVelocityExpiryUs = 100000;
+// A delayed scheduler tick must not replay a long, unseen coast.
+constexpr uint64_t kMomentumGapCancelUs = 250000;
+constexpr uint32_t kMomentumStopVelocityQ8PerSecond = 256;
+constexpr uint16_t kReleaseVelocityFilterWeightQ8 = 128;
+constexpr int64_t kMomentumMaxLaunchVelocityQ8PerSecond = 100000LL * 256;
+constexpr double kQ32PerQ8 = 16777216.0;
+constexpr double kNaturalLogTwo = 0.6931471805599453;
 
 bool qualifies_left_assisted_drag(const PadState& right, int32_t threshold) {
     if (!right.movement_reported || threshold <= 0) {
@@ -792,7 +802,7 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
         actions.scroll_y = scroll.y;
         actions.scroll_x_q8 = scroll.x_q8;
         actions.scroll_y_q8 = scroll.y_q8;
-        update_scroll_release_velocity(base_scroll);
+        update_scroll_release_velocity(scroll, snapshot.cycle_timestamp_us);
         return;
     }
 
@@ -805,12 +815,23 @@ void DualTps43Fsm::apply_motion(const DualPadSnapshot& snapshot, LogicalActions&
             if (!source.fresh_sample) {
                 return;
             }
+            if (scroll_motion_.source == ScrollSource::Right && source.finger_count != 2) {
+                // The sensor can report one remaining finger between releases,
+                // including a relative delta from that finger. Preserve the
+                // last two-finger velocity only until the 100 ms expiry; the
+                // one-finger cursor output above remains unchanged. A different
+                // multi-finger gesture abandons the scroll immediately.
+                if (source.finger_count != 1) {
+                    scroll_motion_ = {};
+                }
+                return;
+            }
             // A stationary contact produces no output but contributes a zero
             // velocity sample, preventing stale fast motion from seeding coast.
             const ScaledDelta stationary = scale_active_delta(
                 0, 0, source.sample_interval_us, tuning_.scroll_base_scale_q8,
                 scroll_motion_.active_scale, 100);
-            update_scroll_release_velocity(stationary);
+            update_scroll_release_velocity(stationary, snapshot.cycle_timestamp_us);
             return;
         }
 
@@ -885,29 +906,62 @@ void DualTps43Fsm::stop_cursor_motion() {
     reset_cursor_temporal_filter();
 }
 
-void DualTps43Fsm::update_scroll_release_velocity(const ScaledDelta& delta) {
+void DualTps43Fsm::update_scroll_release_velocity(const ScaledDelta& delta, uint64_t now_us) {
+    if (scroll_motion_.last_velocity_sample_us != 0 &&
+        (now_us < scroll_motion_.last_velocity_sample_us ||
+         now_us - scroll_motion_.last_velocity_sample_us > kReleaseVelocityExpiryUs)) {
+        scroll_motion_.filtered_velocity_x_q8_per_second = 0;
+        scroll_motion_.filtered_velocity_y_q8_per_second = 0;
+    }
     const int64_t instantaneous_x = multiply_divide_saturated(delta.x_q8, 1000000, delta.sample_interval_us);
     const int64_t instantaneous_y = multiply_divide_saturated(delta.y_q8, 1000000, delta.sample_interval_us);
+    // A fresh stationary sample clears launch history immediately.
+    if (delta.x_q8 == 0 && delta.y_q8 == 0) {
+        scroll_motion_.filtered_velocity_x_q8_per_second = 0;
+        scroll_motion_.filtered_velocity_y_q8_per_second = 0;
+        scroll_motion_.last_velocity_sample_us = now_us;
+        return;
+    }
+    // A fresh opposite-direction sample replaces the old direction immediately.
+    if ((instantaneous_x > 0 && scroll_motion_.filtered_velocity_x_q8_per_second < 0) ||
+        (instantaneous_x < 0 && scroll_motion_.filtered_velocity_x_q8_per_second > 0)) {
+        scroll_motion_.filtered_velocity_x_q8_per_second = 0;
+    }
+    if ((instantaneous_y > 0 && scroll_motion_.filtered_velocity_y_q8_per_second < 0) ||
+        (instantaneous_y < 0 && scroll_motion_.filtered_velocity_y_q8_per_second > 0)) {
+        scroll_motion_.filtered_velocity_y_q8_per_second = 0;
+    }
     scroll_motion_.filtered_velocity_x_q8_per_second = filter_signed(
         scroll_motion_.filtered_velocity_x_q8_per_second, instantaneous_x,
-        tuning_.scroll_momentum.release_velocity_filter_weight_q8);
+        kReleaseVelocityFilterWeightQ8);
     scroll_motion_.filtered_velocity_y_q8_per_second = filter_signed(
         scroll_motion_.filtered_velocity_y_q8_per_second, instantaneous_y,
-        tuning_.scroll_momentum.release_velocity_filter_weight_q8);
+        kReleaseVelocityFilterWeightQ8);
+    scroll_motion_.last_velocity_sample_us = now_us;
 }
 
 void DualTps43Fsm::start_scroll_momentum(uint64_t now_us) {
+    if (!tuning_.scroll_momentum.enabled || scroll_motion_.last_velocity_sample_us == 0 ||
+        now_us < scroll_motion_.last_velocity_sample_us ||
+        now_us - scroll_motion_.last_velocity_sample_us > kReleaseVelocityExpiryUs) {
+        stop_scroll_momentum();
+        return;
+    }
     scroll_motion_.momentum_velocity_x_q8_per_second = multiply_divide_saturated(
-        scroll_motion_.filtered_velocity_x_q8_per_second, tuning_.scroll_momentum.launch_gain_q8, 256);
+        scroll_motion_.filtered_velocity_x_q8_per_second, tuning_.scroll_momentum.launch_strength_percent, 100);
     scroll_motion_.momentum_velocity_y_q8_per_second = multiply_divide_saturated(
-        scroll_motion_.filtered_velocity_y_q8_per_second, tuning_.scroll_momentum.launch_gain_q8, 256);
+        scroll_motion_.filtered_velocity_y_q8_per_second, tuning_.scroll_momentum.launch_strength_percent, 100);
+    scroll_motion_.momentum_velocity_x_q8_per_second = std::clamp(scroll_motion_.momentum_velocity_x_q8_per_second,
+        -kMomentumMaxLaunchVelocityQ8PerSecond, kMomentumMaxLaunchVelocityQ8PerSecond);
+    scroll_motion_.momentum_velocity_y_q8_per_second = std::clamp(scroll_motion_.momentum_velocity_y_q8_per_second,
+        -kMomentumMaxLaunchVelocityQ8PerSecond, kMomentumMaxLaunchVelocityQ8PerSecond);
+    scroll_motion_.momentum_started_us = now_us;
     scroll_motion_.momentum_timestamp_us = now_us;
     scroll_motion_.momentum_active = true;
 
-    const int64_t cutoff_q8 = static_cast<int64_t>(tuning_.scroll_momentum.stop_velocity_logical_units_per_second) * 256;
     if (std::max(
             absolute_int64(scroll_motion_.momentum_velocity_x_q8_per_second),
-            absolute_int64(scroll_motion_.momentum_velocity_y_q8_per_second)) <= static_cast<uint64_t>(cutoff_q8)) {
+            absolute_int64(scroll_motion_.momentum_velocity_y_q8_per_second)) <= kMomentumStopVelocityQ8PerSecond) {
         stop_scroll_momentum();
     }
 }
@@ -917,40 +971,49 @@ void DualTps43Fsm::apply_scroll_momentum(uint64_t now_us, LogicalActions& action
         return;
     }
 
-    const uint32_t interval_us = sample_interval_us(
-        now_us, scroll_motion_.momentum_timestamp_us, kFallbackMotionSampleIntervalUs);
-    const uint16_t decay_q8 = std::min<uint16_t>(tuning_.scroll_momentum.decay_q8, 256);
-    scroll_motion_.momentum_velocity_x_q8_per_second = multiply_divide_saturated(
-        scroll_motion_.momentum_velocity_x_q8_per_second, decay_q8, 256);
-    scroll_motion_.momentum_velocity_y_q8_per_second = multiply_divide_saturated(
-        scroll_motion_.momentum_velocity_y_q8_per_second, decay_q8, 256);
-
-    const int64_t cutoff_q8 = static_cast<int64_t>(tuning_.scroll_momentum.stop_velocity_logical_units_per_second) * 256;
-    if (std::max(
-            absolute_int64(scroll_motion_.momentum_velocity_x_q8_per_second),
-            absolute_int64(scroll_motion_.momentum_velocity_y_q8_per_second)) <= static_cast<uint64_t>(cutoff_q8)) {
+    if (now_us <= scroll_motion_.momentum_timestamp_us ||
+        now_us - scroll_motion_.momentum_timestamp_us > kMomentumGapCancelUs) {
         stop_scroll_momentum();
         return;
     }
-
-    const int64_t x_q8 = multiply_divide_saturated(
-        scroll_motion_.momentum_velocity_x_q8_per_second, interval_us, 1000000);
-    const int64_t y_q8 = multiply_divide_saturated(
-        scroll_motion_.momentum_velocity_y_q8_per_second, interval_us, 1000000);
-    // Keep the Q8 displacement for the HID adapter while retaining the
-    // integral projection for existing logical-action consumers.
-    actions.scroll_x_q8 = x_q8;
-    actions.scroll_y_q8 = y_q8;
-    actions.scroll_x = q8_axis(x_q8, scroll_motion_.momentum_residual_x_q8);
-    actions.scroll_y = q8_axis(y_q8, scroll_motion_.momentum_residual_y_q8);
+    const double half_life_us = static_cast<double>(tuning_.scroll_momentum.half_life_ms) * 1000.0;
+    const double previous = std::exp2(-static_cast<double>(scroll_motion_.momentum_timestamp_us -
+        scroll_motion_.momentum_started_us) / half_life_us);
+    const double current = std::exp2(-static_cast<double>(now_us - scroll_motion_.momentum_started_us) / half_life_us);
+    const double integral_seconds = half_life_us / (1000000.0 * kNaturalLogTwo) * (previous - current);
+    const auto emit_axis = [integral_seconds](int64_t launch_velocity, int64_t& residual_q32) {
+        const double displacement_q32 = static_cast<double>(launch_velocity) * integral_seconds * kQ32PerQ8;
+        // The launch cap, 250 ms gap limit, and 1,000 ms maximum half-life
+        // bound this increment well inside int64_t.
+        const int64_t increment = static_cast<int64_t>(displacement_q32);
+        residual_q32 += increment;
+        const int64_t output_q8 = residual_q32 / static_cast<int64_t>(kQ32PerQ8);
+        residual_q32 %= static_cast<int64_t>(kQ32PerQ8);
+        return output_q8;
+    };
+    actions.scroll_x_q8 = emit_axis(scroll_motion_.momentum_velocity_x_q8_per_second,
+        scroll_motion_.momentum_residual_x_q32);
+    actions.scroll_y_q8 = emit_axis(scroll_motion_.momentum_velocity_y_q8_per_second,
+        scroll_motion_.momentum_residual_y_q32);
+    actions.scroll_x = q8_axis(actions.scroll_x_q8, scroll_motion_.momentum_projection_x_q8);
+    actions.scroll_y = q8_axis(actions.scroll_y_q8, scroll_motion_.momentum_projection_y_q8);
+    scroll_motion_.momentum_timestamp_us = now_us;
+    if (std::max(absolute_int64(scroll_motion_.momentum_velocity_x_q8_per_second),
+            absolute_int64(scroll_motion_.momentum_velocity_y_q8_per_second)) * current <=
+        kMomentumStopVelocityQ8PerSecond) {
+        stop_scroll_momentum();
+    }
 }
 
 void DualTps43Fsm::stop_scroll_momentum() {
     scroll_motion_.momentum_active = false;
     scroll_motion_.momentum_velocity_x_q8_per_second = 0;
     scroll_motion_.momentum_velocity_y_q8_per_second = 0;
-    scroll_motion_.momentum_residual_x_q8 = 0;
-    scroll_motion_.momentum_residual_y_q8 = 0;
+    scroll_motion_.momentum_residual_x_q32 = 0;
+    scroll_motion_.momentum_residual_y_q32 = 0;
+    scroll_motion_.momentum_projection_x_q8 = 0;
+    scroll_motion_.momentum_projection_y_q8 = 0;
+    scroll_motion_.momentum_started_us = 0;
     scroll_motion_.momentum_timestamp_us = 0;
 }
 

@@ -93,6 +93,7 @@ static void add_synthetic_dpad_usages(std::unordered_map<uint8_t, std::unordered
 
 void parse_descriptor(uint16_t vendor_id, uint16_t product_id, const uint8_t* report_descriptor, int len, uint16_t interface, uint8_t itf_num) {
     my_mutex_enter(MutexId::THEIR_USAGES);
+    invalidate_their_derived_inputs();
     auto their_report_sizes_map = parse_descriptor(
         their_usages[interface],
         their_out_usages[interface],
@@ -334,6 +335,7 @@ std::unordered_map<ReportType, std::unordered_map<uint8_t, uint16_t>> parse_desc
 
 void clear_descriptor_data(uint8_t dev_addr) {
     my_mutex_enter(MutexId::THEIR_USAGES);
+    invalidate_their_derived_inputs();
 
     for (auto it = their_usages.cbegin(); it != their_usages.cend();) {
         uint16_t dev_addr_interface = it->first;

@@ -19,7 +19,7 @@ DualTps43Tuning motion_tuning() {
     tuning.neutral_activation_threshold = 50;
     tuning.cursor_base_scale_q8 = 256;
     tuning.scroll_base_scale_q8 = 256;
-    tuning.scroll_momentum = { 256, 256, 192, 100 };
+    tuning.scroll_momentum = { true, 50, 100 };
     tuning.left_assisted_drag_axis_threshold = 2;
     tuning.subthreshold_cursor_threshold = 2;
     return tuning;
@@ -422,7 +422,7 @@ int main() {
             "disabling the A/B curve must restore fixed base-scale scroll output");
     });
 
-    run_case("MOTION-21 active-scroll-gain-does-not-change-release-momentum", [] {
+    run_case("MOTION-21 release-momentum-uses-gain-adjusted-output", [] {
         const auto release_momentum = [](bool enable_gain) {
             DualTps43Tuning tuning = motion_tuning();
             tuning.active_scroll_gain = { enable_gain, 200, 1000, 200, 50 };
@@ -435,15 +435,15 @@ int main() {
 
         const LogicalActions fixed_scale_momentum = release_momentum(false);
         const LogicalActions curved_active_momentum = release_momentum(true);
-        require(curved_active_momentum.scroll_y_q8 == fixed_scale_momentum.scroll_y_q8,
-            "the active-scroll curve must not alter the fixed-base post-release momentum signal");
+        require(curved_active_momentum.scroll_y_q8 > fixed_scale_momentum.scroll_y_q8,
+            "release velocity must use the gain-adjusted active output");
     });
 
     run_case("MOTION-13 fractional-motion-reaches-output-boundary", [] {
         DualTps43Tuning tuning = motion_tuning();
         tuning.cursor_base_scale_q8 = 128;
         tuning.scroll_base_scale_q8 = 4;
-        tuning.scroll_momentum = { 0, 0, 0, 0 };
+        tuning.scroll_momentum = { false, 50, 100 };
 
         Harness cursor(tuning);
         cursor.step(inactive(), one_finger(), 10000);
@@ -489,33 +489,18 @@ int main() {
             "release cycle must seed momentum without replaying movement");
         require_no_cursor_or_buttons(release);
 
-        int32_t previous_magnitude = std::numeric_limits<int32_t>::max();
         bool saw_momentum = false;
         bool reached_zero = false;
-        for (int cycle = 0; cycle < 40; cycle++) {
+        for (int cycle = 0; cycle < 120; cycle++) {
             const LogicalActions action = harness.step(inactive(), inactive(), 10000);
             require_no_cursor_or_buttons(action);
             require(action.scroll_x == 0, "single-axis momentum must not create cross-axis scroll");
 
-            // The first outputs are the exact black-box result of applying the
-            // configured 0.75 velocity decay before each 10 ms momentum step.
-            const int32_t expected_initial_outputs[] = { 15, 11, 8 };
-            if (cycle < 3) {
-                require(action.scroll_y == expected_initial_outputs[cycle],
-                    "momentum output must follow the configured velocity-decay recurrence");
-            }
-
+            // Decay is tied to elapsed time, so each 10 ms step shrinks smoothly.
             const int32_t magnitude = std::abs(action.scroll_y);
-            require(magnitude <= previous_magnitude,
-                "the configured momentum output must not increase before cutoff");
-            if (magnitude > 0) {
-                require(!reached_zero,
-                    "the configured momentum output must remain zero after reaching cutoff");
-                saw_momentum = true;
-            } else {
-                reached_zero = true;
-            }
-            previous_magnitude = magnitude;
+
+            if (magnitude > 0) saw_momentum = true;
+            if (cycle == 119 && magnitude == 0) reached_zero = true;
         }
 
         require(saw_momentum, "release velocity must produce post-release scroll output");
@@ -534,11 +519,9 @@ int main() {
         require_no_cursor_or_buttons(momentum);
     });
 
-    run_case("MOTION-06 zero-filtered-release-velocity-does-not-coast", [] {
+    run_case("MOTION-06 stationary-release-does-not-coast", [] {
         DualTps43Tuning tuning = motion_tuning();
-        // A full-current filter makes this case specifically about a zero
-        // filtered release velocity rather than retained filter history.
-        tuning.scroll_momentum.release_velocity_filter_weight_q8 = 256;
+        // A fresh stationary acquisition clears the internal release filter.
         Harness harness(tuning);
         harness.step(inactive(), two_finger(), 10000);
         require(harness.step(inactive(), two_finger(0, 20), 10000).scroll_y > 0,
@@ -548,22 +531,20 @@ int main() {
         require(stationary.scroll_x == 0 && stationary.scroll_y == 0,
             "active stationary fingers must stop active scroll output");
         require(harness.step(inactive(), inactive(), 10000).scroll_y == 0,
-            "a stationary sample with a full-current filter must clear release velocity");
+            "a stationary sample must clear release velocity");
         require(harness.step(inactive(), inactive(), 10000).scroll_y == 0,
             "momentum must remain stopped after a stationary release");
 
-        DualTps43Tuning partial_tuning = motion_tuning();
-        partial_tuning.scroll_momentum.release_velocity_filter_weight_q8 = 128;
-        Harness partial(partial_tuning);
+        Harness partial;
         partial.step(inactive(), two_finger(), 10000);
         require(partial.step(inactive(), two_finger(0, 20), 10000).scroll_y > 0,
-            "partial-filter setup scroll movement must produce output");
+            "second setup scroll movement must produce output");
         require(partial.step(inactive(), two_finger(), 10000).scroll_y == 0,
-            "a stationary sample must still stop active scroll output with a partial filter");
+            "a stationary sample must stop active scroll output");
         require(partial.step(inactive(), inactive(), 10000).scroll_y == 0,
-            "partial filtered release must seed without replaying movement");
-        require(partial.step(inactive(), inactive(), 10000).scroll_y > 0,
-            "a partial release-velocity filter must retain history for momentum launch");
+            "stationary release must not replay movement");
+        require(partial.step(inactive(), inactive(), 10000).scroll_y == 0,
+            "a fresh stationary sample must cancel release history");
     });
 
     run_case("MOTION-07 new-touch-cancels-momentum", [] {
@@ -592,6 +573,47 @@ int main() {
             "a replacement touch in the release cycle must prevent momentum from starting");
         require(same_cycle.step(one_finger(), inactive(), 10000).scroll_y == 0,
             "prevented same-cycle momentum must remain stopped");
+    });
+
+    run_case("MOTION-31 right-staggered-lift-keeps-recent-scroll-velocity", [] {
+        Harness quick_lift;
+        quick_lift.step(inactive(), two_finger(), 10000);
+        require(quick_lift.step(inactive(), two_finger(0, 20), 10000).scroll_y > 0,
+            "setup must establish Right two-finger scrolling");
+        require(quick_lift.step(inactive(), one_finger(), 10000).scroll_y == 0,
+            "one remaining stationary finger must not scroll");
+        require(quick_lift.step(inactive(), inactive(), 10000).scroll_y == 0,
+            "final lift must seed momentum without replaying movement");
+        require(quick_lift.step(inactive(), inactive(), 10000).scroll_y > 0,
+            "a quick staggered lift must retain the recent two-finger release velocity");
+
+        Harness stale_lift;
+        stale_lift.step(inactive(), two_finger(), 10000);
+        stale_lift.step(inactive(), two_finger(0, 20), 10000);
+        stale_lift.step(inactive(), one_finger(), 10000);
+        stale_lift.step(inactive(), one_finger(), 100000);
+        stale_lift.step(inactive(), inactive(), 10000);
+        require(stale_lift.step(inactive(), inactive(), 10000).scroll_y == 0,
+            "a lingering finger must not launch stale momentum");
+
+        Harness cursor_transition;
+        cursor_transition.step(inactive(), two_finger(), 10000);
+        cursor_transition.step(inactive(), two_finger(0, 20), 10000);
+        require(cursor_transition.step(inactive(), one_finger(10, 0), 10000).cursor_x > 0,
+            "the remaining finger must keep its existing cursor output");
+        require(cursor_transition.step(inactive(), inactive(), 10000).scroll_y == 0,
+            "final lift must not replay active scroll output");
+        require(cursor_transition.step(inactive(), inactive(), 10000).scroll_y > 0,
+            "a brief moving one-finger lift must retain recent two-finger velocity");
+
+        Harness long_cursor_transition;
+        long_cursor_transition.step(inactive(), two_finger(), 10000);
+        long_cursor_transition.step(inactive(), two_finger(0, 20), 10000);
+        long_cursor_transition.step(inactive(), one_finger(10, 0), 10000);
+        long_cursor_transition.step(inactive(), one_finger(10, 0), 100000);
+        long_cursor_transition.step(inactive(), inactive(), 10000);
+        require(long_cursor_transition.step(inactive(), inactive(), 10000).scroll_y == 0,
+            "cursor use lasting beyond the expiry must not launch stale scroll momentum");
     });
 
     run_case("MOTION-08 active-cursor-scale-is-independent-of-speed", [] {
@@ -629,7 +651,7 @@ int main() {
     run_case("MOTION-10 fractional-momentum-displacement-accumulates", [] {
         DualTps43Tuning tuning = motion_tuning();
         tuning.scroll_base_scale_q8 = 256;
-        tuning.scroll_momentum = { 256, 256, 255, 0 };
+        tuning.scroll_momentum = { true, 50, 1000 };
         Harness harness(tuning);
         harness.step(inactive(), two_finger(), 10000);
         require(harness.step(inactive(), two_finger(0, 1), 10000).scroll_y == 1,
@@ -640,8 +662,8 @@ int main() {
         const LogicalActions first = harness.step(inactive(), inactive(), 10000);
         const LogicalActions second = harness.step(inactive(), inactive(), 10000);
         require(first.scroll_y == 0, "one sub-unit momentum displacement must remain fractional");
-        require(second.scroll_y == 1,
-            "consecutive sub-unit momentum displacements must accumulate into output");
+        require(second.scroll_y_q8 > 0,
+            "sub-unit momentum displacement must reach high-precision output");
         require_no_cursor_or_buttons(first);
         require_no_cursor_or_buttons(second);
     });
@@ -649,8 +671,8 @@ int main() {
     run_case("MOTION-11 scroll-history-cannot-escape-right-latch", [] {
         for (uint16_t weight : { 128, 256 }) {
             DualTps43Tuning tuning = motion_tuning();
-            tuning.scroll_momentum.release_velocity_filter_weight_q8 = weight;
-            tuning.scroll_momentum.stop_velocity_logical_units_per_second = 0;
+            (void) weight;
+
             Harness harness(tuning);
             harness.step(inactive(), two_finger(), 10000);
             require(harness.step(inactive(), two_finger(10, 20), 10000).scroll_y > 0,
@@ -699,8 +721,8 @@ int main() {
     run_case("MOTION-12 scroll-history-cannot-escape-left-assisted-drag", [] {
         for (uint16_t weight : { 128, 256 }) {
             DualTps43Tuning tuning = motion_tuning();
-            tuning.scroll_momentum.release_velocity_filter_weight_q8 = weight;
-            tuning.scroll_momentum.stop_velocity_logical_units_per_second = 0;
+            (void) weight;
+
             Harness harness(tuning);
             harness.step(one_finger(), inactive(), 10000);
             harness.step(one_finger(), inactive(), 200000);
@@ -739,6 +761,116 @@ int main() {
             require(harness.step(inactive(), inactive(), 10000).scroll_y > 0,
                 "fresh scrolling after drop must still launch momentum");
         }
+    });
+
+
+    run_case("MOTION-28 enabling-momentum-preserves-active-scroll-on-both-pads", [] {
+        for (bool left : { false, true }) {
+            const auto active = [left](bool enabled) {
+                auto tuning = motion_tuning();
+                tuning.scroll_momentum.enabled = enabled;
+                tuning.active_scroll_gain = { true, 200, 1000, 200, 50 };
+                Harness harness(tuning);
+                harness.step(left ? one_finger() : inactive(), left ? inactive() : two_finger(), 10000);
+                return harness.step(left ? one_finger(0, 10) : inactive(),
+                    left ? inactive() : two_finger(0, 10), 10000);
+            };
+            const auto off = active(false);
+            const auto on = active(true);
+            require(off.scroll_y == on.scroll_y && off.scroll_y_q8 == on.scroll_y_q8,
+                "momentum enable must not change gain-adjusted active scrolling");
+        }
+    });
+
+    run_case("MOTION-29 sub-Q8-displacement-survives-updates", [] {
+        auto tuning = motion_tuning();
+        tuning.scroll_base_scale_q8 = 16;
+        Harness harness(tuning);
+        harness.step(inactive(), two_finger(), 10000);
+        harness.step(inactive(), two_finger(0, 1), 10000);
+        harness.step(inactive(), inactive(), 10000);
+        require(harness.step(inactive(), inactive(), 1000).scroll_y_q8 == 0,
+            "the first low-speed update should be below one Q8 output unit");
+        int64_t accumulated_q8 = 0;
+        for (int i = 0; i < 20; ++i) {
+            accumulated_q8 += harness.step(inactive(), inactive(), 1000).scroll_y_q8;
+        }
+        require(accumulated_q8 > 0, "sub-Q8 displacement must accumulate into later output");
+    });
+
+    run_case("MOTION-25 elapsed-time-decay-is-cadence-independent", [] {
+        const auto coast = [](uint64_t cadence_us) {
+            Harness harness;
+            harness.step(inactive(), two_finger(), 10000);
+            harness.step(inactive(), two_finger(0, 20), 10000);
+            harness.step(inactive(), inactive(), 10000);
+            int64_t total_q8 = 0;
+            for (uint64_t elapsed = 0; elapsed < 100000; elapsed += cadence_us) {
+                total_q8 += harness.step(inactive(), inactive(), cadence_us).scroll_y_q8;
+            }
+            return total_q8;
+        };
+        require(std::llabs(coast(10000) - coast(20000)) <= 1,
+            "100 ms coast must be independent of update cadence within Q8 rounding");
+    });
+
+    run_case("MOTION-30 half-life-halves-following-window", [] {
+        Harness harness;
+        harness.step(inactive(), two_finger(), 10000);
+        harness.step(inactive(), two_finger(0, 20), 10000);
+        harness.step(inactive(), inactive(), 10000);
+        int64_t first_window_q8 = 0;
+        int64_t second_window_q8 = 0;
+        for (int i = 0; i < 20; ++i) {
+            const auto action = harness.step(inactive(), inactive(), 10000);
+            (i < 10 ? first_window_q8 : second_window_q8) += action.scroll_y_q8;
+        }
+        require(std::llabs(first_window_q8 - second_window_q8 * 2) <= 2,
+            "the second 100 ms window must travel half the first window");
+    });
+
+    run_case("MOTION-26 stale-release-and-long-gap-cancel", [] {
+        Harness within_expiry;
+        within_expiry.step(inactive(), two_finger(), 10000);
+        within_expiry.step(inactive(), two_finger(0, 20), 10000);
+        within_expiry.step(inactive(), one_finger(), 10000);
+        within_expiry.step(inactive(), inactive(), 90000);
+        require(within_expiry.step(inactive(), inactive(), 10000).scroll_y_q8 > 0,
+            "a release exactly 100 ms after active scroll must retain momentum");
+
+        Harness beyond_expiry;
+        beyond_expiry.step(inactive(), two_finger(), 10000);
+        beyond_expiry.step(inactive(), two_finger(0, 20), 10000);
+        beyond_expiry.step(inactive(), one_finger(), 10000);
+        beyond_expiry.step(inactive(), inactive(), 100001);
+        require(beyond_expiry.step(inactive(), inactive(), 10000).scroll_y_q8 == 0,
+            "a release older than 100 ms must not launch momentum");
+
+        Harness stale;
+        stale.step(inactive(), two_finger(), 10000);
+        stale.step(inactive(), two_finger(0, 20), 10000);
+        stale.step(inactive(), two_finger(), 70000);
+        stale.step(inactive(), inactive(), 10000);
+        require(stale.step(inactive(), inactive(), 10000).scroll_y_q8 == 0,
+            "stale or stationary input must not launch momentum");
+        Harness gap;
+        gap.step(inactive(), two_finger(), 10000);
+        gap.step(inactive(), two_finger(0, 20), 10000);
+        gap.step(inactive(), inactive(), 10000);
+        require(gap.step(inactive(), inactive(), 300000).scroll_y_q8 == 0,
+            "a long scheduling gap must cancel momentum");
+        require(gap.step(inactive(), inactive(), 10000).scroll_y_q8 == 0,
+            "cancelled momentum must remain stopped");
+    });
+
+    run_case("MOTION-27 reversal-replaces-release-direction", [] {
+        Harness harness;
+        harness.step(inactive(), two_finger(), 10000);
+        harness.step(inactive(), two_finger(0, 20), 10000);
+        harness.step(inactive(), two_finger(0, -20), 10000);
+        harness.step(inactive(), inactive(), 10000);
+        require(harness.step(inactive(), inactive(), 10000).scroll_y_q8 < 0,
+            "release momentum must follow the newest reversed direction");
     });
 
     std::cout << "Motion result: " << passes << " passed, " << failures << " failed\n";

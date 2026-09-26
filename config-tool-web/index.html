@@ -222,6 +222,11 @@
                         <div class="form-text">The LP1 timeout accepts 20-second increments (the sensor register's resolution). Example: 120 s + 180 s reaches LP2 5 minutes after entering Idle.</div>
                     </div>
                 </div>
+                <h6 class="mt-4">Post-release scroll momentum</h6>
+                <p class="text-muted">Coasts after either pad releases. A new touch or a long processing gap stops the coast.</p>
+                <div class="row mt-3 align-items-center"><div class="col-4 text-end"><label for="tps43_scroll_momentum_enabled" class="col-form-label">Enable</label></div><div class="col-auto"><input type="checkbox" class="form-check-input" id="tps43_scroll_momentum_enabled"></div></div>
+                <div class="row mt-3 align-items-center"><div class="col-4 text-end"><label for="tps43_scroll_momentum_launch_strength" class="col-form-label">Launch Strength</label></div><div class="col-auto input-group" style="max-width: 160px;"><input type="number" min="0" max="100" step="1" id="tps43_scroll_momentum_launch_strength" class="form-control text-end"><span class="input-group-text">%</span></div></div>
+                <div class="row mt-3 align-items-center"><div class="col-4 text-end"><label for="tps43_scroll_momentum_half_life" class="col-form-label">Half-Life</label></div><div class="col-auto input-group" style="max-width: 170px;"><input type="number" min="10" max="1000" step="1" id="tps43_scroll_momentum_half_life" class="form-control text-end"><span class="input-group-text">ms</span></div></div>
                 <div class="row mt-3 align-items-center">
                     <div class="col-4 text-end">
                         <label for="tps43_scroll_direction_enabled" class="col-form-label">Scroll direction classification</label>
