@@ -27,6 +27,19 @@ target_include_directories(dual_tps43_fsm_test PRIVATE ../src)
 
 add_test(NAME dual_tps43_fsm_test COMMAND dual_tps43_fsm_test)
 
+add_executable(dual_tps43_scroll_direction_test
+    dual_tps43_scroll_direction_test.cc
+    ../src/dual_tps43_fsm.cc
+    ../src/pad_state.cc
+)
+target_compile_features(dual_tps43_scroll_direction_test PRIVATE cxx_std_17)
+target_compile_options(dual_tps43_scroll_direction_test PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(
+    dual_tps43_scroll_direction_test PRIVATE TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION=1)
+target_include_directories(dual_tps43_scroll_direction_test PRIVATE ../src)
+
+add_test(NAME dual_tps43_scroll_direction_test COMMAND dual_tps43_scroll_direction_test)
+
 add_executable(dual_tps43_motion_test
     dual_tps43_motion_test.cc
     ../src/dual_tps43_fsm.cc

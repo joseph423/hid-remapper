@@ -8,7 +8,7 @@ const STICKY_FLAG = 1 << 0;
 const TAP_FLAG = 1 << 1;
 const HOLD_FLAG = 1 << 2;
 const CONFIG_SIZE = 32;
-const CONFIG_VERSION = 26;
+const CONFIG_VERSION = 27;
 const VENDOR_ID = 0xCAFE;
 const PRODUCT_ID = 0xBAF2;
 const DEFAULT_PARTIAL_SCROLL_TIMEOUT = 1000000;
@@ -38,6 +38,9 @@ const DEFAULT_TPS43_TUNING = {
     'active_scroll_fast_speed_limit_counts_per_second': 1000,
     'active_scroll_slow_gain_percent': 200,
     'active_scroll_fast_gain_percent': 50,
+    'scroll_direction_classification_enabled': true,
+    'scroll_direction_classification_distance_counts': 8,
+    'scroll_direction_axis_dominance_ratio': 2,
 };
 
 const NLAYERS = 8;
@@ -92,6 +95,8 @@ const GET_TPS43_SCROLL_GAIN = 31;
 const SET_TPS43_SCROLL_GAIN = 32;
 const GET_TPS43_POWER_MODE_TIMEOUTS = 33;
 const SET_TPS43_POWER_MODE_TIMEOUTS = 34;
+const GET_TPS43_SCROLL_DIRECTION = 35;
+const SET_TPS43_SCROLL_DIRECTION = 36;
 
 const PERSIST_CONFIG_SUCCESS = 1;
 const PERSIST_CONFIG_CONFIG_TOO_BIG = 2;
@@ -239,6 +244,9 @@ document.addEventListener("DOMContentLoaded", function () {
     document.getElementById("tps43_scroll_base_scale_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_idle_timeout_before_lp1_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_lp1_timeout_before_lp2_input").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_scroll_direction_enabled").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_scroll_direction_distance").addEventListener("change", tps43_tuning_onchange);
+    document.getElementById("tps43_scroll_direction_ratio").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_cursor_subthreshold_expiry_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_cursor_subthreshold_threshold_input").addEventListener("change", tps43_tuning_onchange);
     document.getElementById("tps43_cursor_temporal_filter_enabled").addEventListener("change", tps43_tuning_onchange);
@@ -410,6 +418,14 @@ async function load_from_device() {
         config['tps43_tuning']['idle_timeout_before_lp1_seconds'] = idle_timeout_before_lp1_seconds;
         config['tps43_tuning']['lp1_timeout_before_lp2_seconds'] = lp1_timeout_before_lp2_20s_units * 20;
 
+        await send_feature_command(GET_TPS43_SCROLL_DIRECTION);
+        const [scroll_direction_classification_enabled, scroll_direction_classification_distance_counts,
+            scroll_direction_axis_dominance_ratio] = await read_config_feature([UINT8, UINT8, UINT8]);
+        config['tps43_tuning']['scroll_direction_classification_enabled'] = !!scroll_direction_classification_enabled;
+        config['tps43_tuning']['scroll_direction_classification_distance_counts'] =
+            scroll_direction_classification_distance_counts;
+        config['tps43_tuning']['scroll_direction_axis_dominance_ratio'] = scroll_direction_axis_dominance_ratio;
+
         for (let i = 0; i < mapping_count; i++) {
             await send_feature_command(GET_MAPPING, [[UINT32, i]]);
             const [target_usage, source_usage, scaling, layer_mask, mapping_flags, hub_ports] =
@@ -559,6 +575,16 @@ async function save_to_device() {
             tps43_tuning['subthreshold_cursor_threshold'] > 255) {
             throw new Error('Sub-threshold cursor threshold must be between 1 and 255.');
         }
+        if (!Number.isInteger(tps43_tuning['scroll_direction_classification_distance_counts']) ||
+            tps43_tuning['scroll_direction_classification_distance_counts'] < 1 ||
+            tps43_tuning['scroll_direction_classification_distance_counts'] > 255) {
+            throw new Error('Scroll classification distance must be between 1 and 255 counts.');
+        }
+        if (!Number.isInteger(tps43_tuning['scroll_direction_axis_dominance_ratio']) ||
+            tps43_tuning['scroll_direction_axis_dominance_ratio'] < 2 ||
+            tps43_tuning['scroll_direction_axis_dominance_ratio'] > 255) {
+            throw new Error('Scroll axis dominance ratio must be between 2:1 and 255:1.');
+        }
         const slow_speed_limit = tps43_tuning['cursor_filter_slow_speed_limit_counts_per_second'];
         const fast_speed_limit = tps43_tuning['cursor_filter_fast_speed_limit_counts_per_second'];
         if (!Number.isInteger(slow_speed_limit) || slow_speed_limit < 1 || slow_speed_limit >= fast_speed_limit ||
@@ -629,6 +655,11 @@ async function save_to_device() {
         await send_feature_command(SET_TPS43_POWER_MODE_TIMEOUTS, [
             [UINT8, tps43_tuning['idle_timeout_before_lp1_seconds']],
             [UINT8, tps43_tuning['lp1_timeout_before_lp2_seconds'] / 20],
+        ]);
+        await send_feature_command(SET_TPS43_SCROLL_DIRECTION, [
+            [UINT8, tps43_tuning['scroll_direction_classification_enabled'] ? 1 : 0],
+            [UINT8, tps43_tuning['scroll_direction_classification_distance_counts']],
+            [UINT8, tps43_tuning['scroll_direction_axis_dominance_ratio']],
         ]);
         await send_feature_command(CLEAR_MAPPING);
 
@@ -820,6 +851,12 @@ function set_config_ui_state() {
         tps43_tuning['idle_timeout_before_lp1_seconds'];
     document.getElementById('tps43_lp1_timeout_before_lp2_input').value =
         tps43_tuning['lp1_timeout_before_lp2_seconds'];
+    document.getElementById('tps43_scroll_direction_enabled').checked =
+        tps43_tuning['scroll_direction_classification_enabled'];
+    document.getElementById('tps43_scroll_direction_distance').value =
+        tps43_tuning['scroll_direction_classification_distance_counts'];
+    document.getElementById('tps43_scroll_direction_ratio').value =
+        tps43_tuning['scroll_direction_axis_dominance_ratio'];
     document.getElementById('tps43_cursor_subthreshold_expiry_input').value = tps43_tuning['subthreshold_cursor_expiry_ms'];
     document.getElementById('tps43_cursor_subthreshold_threshold_input').value = tps43_tuning['subthreshold_cursor_threshold'];
     document.getElementById('tps43_cursor_temporal_filter_enabled').checked =
@@ -1019,6 +1056,12 @@ function set_ui_state() {
     for (const key of ['active_scroll_speed_gain_enabled', 'active_scroll_slow_speed_limit_counts_per_second',
         'active_scroll_fast_speed_limit_counts_per_second', 'active_scroll_slow_gain_percent',
         'active_scroll_fast_gain_percent']) {
+        if (config['tps43_tuning'][key] === undefined) {
+            config['tps43_tuning'][key] = DEFAULT_TPS43_TUNING[key];
+        }
+    }
+    for (const key of ['scroll_direction_classification_enabled', 'scroll_direction_classification_distance_counts',
+        'scroll_direction_axis_dominance_ratio']) {
         if (config['tps43_tuning'][key] === undefined) {
             config['tps43_tuning'][key] = DEFAULT_TPS43_TUNING[key];
         }
@@ -1265,7 +1308,7 @@ async function check_device_version() {
     // device because it could be version X, ignore our GET_CONFIG call with version Y and
     // just happen to have Y at the right place in the buffer from some previous call done
     // by some other software.
-    for (const version of [CONFIG_VERSION, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
+    for (const version of [CONFIG_VERSION, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
         await send_feature_command(GET_CONFIG, [], version);
         const [received_version] = await read_config_feature([UINT8]);
         if (received_version == version) {
@@ -1670,6 +1713,8 @@ function tps43_tuning_onchange() {
         ['active_scroll_fast_speed_limit_counts_per_second', 'tps43_active_scroll_fast_speed_limit', 2, 10000],
         ['active_scroll_slow_gain_percent', 'tps43_active_scroll_slow_gain', 0, 300],
         ['active_scroll_fast_gain_percent', 'tps43_active_scroll_fast_gain', 0, 300],
+        ['scroll_direction_classification_distance_counts', 'tps43_scroll_direction_distance', 1, 255],
+        ['scroll_direction_axis_dominance_ratio', 'tps43_scroll_direction_ratio', 2, 255],
     ];
     for (const [key, element_id, minimum, maximum] of fields) {
         let value = parseInt(document.getElementById(element_id).value, 10);
@@ -1689,6 +1734,8 @@ function tps43_tuning_onchange() {
         document.getElementById('tps43_cursor_temporal_filter_enabled').checked;
     config['tps43_tuning']['active_scroll_speed_gain_enabled'] =
         document.getElementById('tps43_active_scroll_speed_gain_enabled').checked;
+    config['tps43_tuning']['scroll_direction_classification_enabled'] =
+        document.getElementById('tps43_scroll_direction_enabled').checked;
 }
 
 function gpio_debounce_time_onchange() {

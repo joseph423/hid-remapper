@@ -35,6 +35,11 @@ void assert_equal(const DualTps43Tuning& expected, const DualTps43Tuning& actual
            actual.active_scroll_gain.fast_speed_limit_counts_per_second);
     assert(expected.active_scroll_gain.slow_gain_percent == actual.active_scroll_gain.slow_gain_percent);
     assert(expected.active_scroll_gain.fast_gain_percent == actual.active_scroll_gain.fast_gain_percent);
+    assert(expected.scroll_direction_classification.enabled == actual.scroll_direction_classification.enabled);
+    assert(expected.scroll_direction_classification.classification_distance_counts ==
+           actual.scroll_direction_classification.classification_distance_counts);
+    assert(expected.scroll_direction_classification.axis_dominance_ratio ==
+           actual.scroll_direction_classification.axis_dominance_ratio);
     assert(expected.idle_timeout_before_lp1_seconds == actual.idle_timeout_before_lp1_seconds);
     assert(expected.lp1_timeout_before_lp2_20s_units == actual.lp1_timeout_before_lp2_20s_units);
 }
@@ -46,6 +51,9 @@ int main() {
     assert(validate_tps43_tuning(defaults));
     assert(defaults.subthreshold_cursor_threshold == 2);
     assert(defaults.cursor_temporal_filter_enabled);
+    assert(defaults.scroll_direction_classification.enabled);
+    assert(defaults.scroll_direction_classification.classification_distance_counts == 8);
+    assert(defaults.scroll_direction_classification.axis_dominance_ratio == 2);
     assert(defaults.cursor_filter_slow_speed_limit_counts_per_second == 500);
     assert(defaults.cursor_filter_fast_speed_limit_counts_per_second == 2000);
     assert(defaults.cursor_filter_slow_weight_percent == 20);
@@ -176,12 +184,25 @@ int main() {
     for (std::size_t i = 0; i < sizeof(legacy_v6); i++) {
         legacy_v6[i] = buffer[i];
     }
-    legacy_v6[4] = kPreviousTps43TuningBlockVersion;
+    legacy_v6[4] = kTps43TuningBlockV6Version;
     legacy_v6[6] = static_cast<uint8_t>(kTps43TuningBlockV6Size);
     legacy_v6[7] = static_cast<uint8_t>(kTps43TuningBlockV6Size >> 8);
     assert(decode_tps43_tuning(legacy_v6, sizeof(legacy_v6), &decoded));
     assert(decoded.idle_timeout_before_lp1_seconds == defaults.idle_timeout_before_lp1_seconds);
     assert(decoded.lp1_timeout_before_lp2_20s_units == defaults.lp1_timeout_before_lp2_20s_units);
+    assert(decoded.scroll_direction_classification.enabled == defaults.scroll_direction_classification.enabled);
+
+    uint8_t legacy_v7[kTps43TuningBlockV7Size] = {};
+    for (std::size_t i = 0; i < sizeof(legacy_v7); i++) {
+        legacy_v7[i] = buffer[i];
+    }
+    legacy_v7[4] = 7;
+    legacy_v7[6] = static_cast<uint8_t>(kTps43TuningBlockV7Size);
+    legacy_v7[7] = static_cast<uint8_t>(kTps43TuningBlockV7Size >> 8);
+    assert(decode_tps43_tuning(legacy_v7, sizeof(legacy_v7), &decoded));
+    assert(decoded.scroll_direction_classification.enabled == defaults.scroll_direction_classification.enabled);
+    assert(decoded.scroll_direction_classification.classification_distance_counts == 8);
+    assert(decoded.scroll_direction_classification.axis_dominance_ratio == 2);
 
     uint8_t legacy_v2[kTps43TuningBlockV2Size] = {};
     for (std::size_t i = 0; i < sizeof(legacy_v2); i++) {
@@ -200,6 +221,10 @@ int main() {
     assert(encode_tps43_tuning(custom_threshold, custom_block, sizeof(custom_block)));
     assert(decode_tps43_tuning(custom_block, sizeof(custom_block), &decoded));
     assert(decoded.subthreshold_cursor_threshold == 5);
+    custom_threshold.scroll_direction_classification = { false, 12, 4 };
+    assert(encode_tps43_tuning(custom_threshold, custom_block, sizeof(custom_block)));
+    assert(decode_tps43_tuning(custom_block, sizeof(custom_block), &decoded));
+    assert_equal(custom_threshold, decoded);
 
     uint8_t corrupted[kTps43TuningBlockSize] = {};
     for (std::size_t i = 0; i < sizeof(buffer); i++) {
@@ -211,6 +236,9 @@ int main() {
 
     DualTps43Tuning invalid = defaults;
     invalid.stationary_intent_threshold_us = invalid.tap_max_duration_us;
+    assert(!validate_tps43_tuning(invalid));
+    invalid = defaults;
+    invalid.scroll_direction_classification.axis_dominance_ratio = 1;
     assert(!validate_tps43_tuning(invalid));
     invalid = defaults;
     invalid.cursor_base_scale_q8 = -1;
@@ -314,6 +342,22 @@ int main() {
     assert(set_configured_tps43_cursor_threshold(4));
     assert(set_configured_tps43_cursor_threshold(255));
     assert(configured_tps43_tuning().subthreshold_cursor_threshold == 255);
+
+    tps43_scroll_direction_tuning_t direction_controls = {};
+    assert(get_configured_tps43_scroll_direction(&direction_controls));
+    assert(direction_controls.enabled == 1);
+    assert(direction_controls.classification_distance_counts == 8);
+    assert(direction_controls.axis_dominance_ratio == 2);
+    direction_controls = { 0, 12, 4 };
+    assert(set_configured_tps43_scroll_direction(direction_controls));
+    tps43_scroll_direction_tuning_t saved_direction_controls = {};
+    assert(get_configured_tps43_scroll_direction(&saved_direction_controls));
+    assert(saved_direction_controls.enabled == 0);
+    assert(saved_direction_controls.classification_distance_counts == 12);
+    assert(saved_direction_controls.axis_dominance_ratio == 4);
+    assert(!set_configured_tps43_scroll_direction({ 2, 8, 2 }));
+    assert(!set_configured_tps43_scroll_direction({ 1, 0, 2 }));
+    assert(!set_configured_tps43_scroll_direction({ 1, 8, 1 }));
 
     tps43_cursor_filter_tuning_t filter_controls = {};
     assert(get_configured_tps43_cursor_filter(&filter_controls));

@@ -66,6 +66,14 @@ if(TPS43_ENABLE_SERIAL_RATE_OVERRIDE)
 target_compile_definitions(remapper PRIVATE TPS43_ENABLE_SERIAL_RATE_OVERRIDE=1)
 endif()
 
+option(
+    TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION
+    "Enable the experimental scroll direction classifier for A/B testing"
+    OFF)
+if(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+target_compile_definitions(remapper PRIVATE TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION=1)
+endif()
+
 option(TPS43_PRINT_STATS "Print generic Remapper performance statistics on the CDC serial stream" OFF)
 if(TPS43_PRINT_STATS)
 target_compile_definitions(remapper PRIVATE TPS43_PRINT_STATS=1)

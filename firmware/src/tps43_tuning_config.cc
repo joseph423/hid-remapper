@@ -97,6 +97,7 @@ DualTps43Tuning production_tuning() {
     tuning.cursor_base_scale_q8 = 128;
     tuning.scroll_base_scale_q8 = 4;
     tuning.active_scroll_gain = { false, 200, 1000, 200, 50 };
+    tuning.scroll_direction_classification = { true, 8, 2 };
     tuning.scroll_momentum = { 0, 0, 0, 0 };
     tuning.left_assisted_drag_axis_threshold = 2;
     tuning.subthreshold_cursor_expiry_us = 50000;
@@ -143,6 +144,8 @@ bool validate_tps43_tuning(const DualTps43Tuning& tuning) {
            tuning.active_scroll_gain.fast_speed_limit_counts_per_second <= 10000 &&
            tuning.active_scroll_gain.slow_gain_percent <= 300 &&
            tuning.active_scroll_gain.fast_gain_percent <= 300 &&
+           tuning.scroll_direction_classification.classification_distance_counts >= 1 &&
+           tuning.scroll_direction_classification.axis_dominance_ratio >= 2 &&
            tuning.cursor_base_scale_q8 >= 0 && tuning.scroll_base_scale_q8 >= 0 &&
            validate_momentum(tuning.scroll_momentum);
 }
@@ -198,6 +201,9 @@ bool encode_tps43_tuning(const DualTps43Tuning& tuning, uint8_t* buffer, std::si
     cursor += 2;
     *cursor++ = tuning.idle_timeout_before_lp1_seconds;
     *cursor++ = tuning.lp1_timeout_before_lp2_20s_units;
+    *cursor++ = tuning.scroll_direction_classification.enabled ? 1 : 0;
+    *cursor++ = tuning.scroll_direction_classification.classification_distance_counts;
+    *cursor++ = tuning.scroll_direction_classification.axis_dominance_ratio;
     return static_cast<std::size_t>(cursor - buffer) == kTps43TuningBlockSize;
 }
 
@@ -219,11 +225,14 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
                            buffer_size >= kTps43TuningBlockV4Size;
     const bool legacy_v5 = block_version == 5 && block_size == kTps43TuningBlockV5Size &&
                            buffer_size >= kTps43TuningBlockV5Size;
-    const bool legacy_v6 = block_version == kPreviousTps43TuningBlockVersion &&
+    const bool legacy_v6 = block_version == kTps43TuningBlockV6Version &&
                            block_size == kTps43TuningBlockV6Size && buffer_size >= kTps43TuningBlockV6Size;
-    const bool current_v7 = block_version == kTps43TuningBlockVersion && block_size == kTps43TuningBlockSize &&
+    const bool legacy_v7 = block_version == 7 && block_size == kTps43TuningBlockV7Size &&
+                           buffer_size >= kTps43TuningBlockV7Size;
+    const bool current_v8 = block_version == kTps43TuningBlockVersion && block_size == kTps43TuningBlockSize &&
                             buffer_size >= kTps43TuningBlockSize;
-    if (!legacy_v1 && !legacy_v2 && !legacy_v3 && !legacy_v4 && !legacy_v5 && !legacy_v6 && !current_v7) {
+    if (!legacy_v1 && !legacy_v2 && !legacy_v3 && !legacy_v4 && !legacy_v5 && !legacy_v6 && !legacy_v7 &&
+        !current_v8) {
         return false;
     }
 
@@ -247,21 +256,21 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
     cursor += 4;
     decoded.left_assisted_drag_axis_threshold = read_i32(cursor);
     cursor += 4;
-    if (legacy_v2 || legacy_v3 || legacy_v4 || legacy_v5 || legacy_v6 || current_v7) {
+    if (legacy_v2 || legacy_v3 || legacy_v4 || legacy_v5 || legacy_v6 || legacy_v7 || current_v8) {
         decoded.subthreshold_cursor_expiry_us = read_u32(cursor);
         cursor += 4;
     }
-    if (legacy_v3 || legacy_v4 || legacy_v5 || legacy_v6 || current_v7) {
+    if (legacy_v3 || legacy_v4 || legacy_v5 || legacy_v6 || legacy_v7 || current_v8) {
         decoded.subthreshold_cursor_threshold = *cursor;
         cursor++;
     }
-    if (legacy_v4 || legacy_v5 || legacy_v6 || current_v7) {
+    if (legacy_v4 || legacy_v5 || legacy_v6 || legacy_v7 || current_v8) {
         if (*cursor > 1) {
             return false;
         }
         decoded.cursor_temporal_filter_enabled = *cursor++ != 0;
         decoded.cursor_filter_slow_weight_percent = *cursor++;
-        if (legacy_v5 || legacy_v6 || current_v7) {
+        if (legacy_v5 || legacy_v6 || legacy_v7 || current_v8) {
             decoded.cursor_filter_slow_speed_limit_counts_per_second = read_u16(cursor);
             cursor += 2;
             decoded.cursor_filter_fast_speed_limit_counts_per_second = read_u16(cursor);
@@ -277,7 +286,7 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
         }
     }
 
-    if (legacy_v6 || current_v7) {
+    if (legacy_v6 || legacy_v7 || current_v8) {
         if (*cursor > 1) {
             return false;
         }
@@ -291,9 +300,17 @@ bool decode_tps43_tuning(const uint8_t* buffer, std::size_t buffer_size, DualTps
         decoded.active_scroll_gain.fast_gain_percent = read_u16(cursor);
         cursor += 2;
     }
-    if (current_v7) {
+    if (legacy_v7 || current_v8) {
         decoded.idle_timeout_before_lp1_seconds = *cursor++;
         decoded.lp1_timeout_before_lp2_20s_units = *cursor++;
+    }
+    if (current_v8) {
+        if (*cursor > 1) {
+            return false;
+        }
+        decoded.scroll_direction_classification.enabled = *cursor++ != 0;
+        decoded.scroll_direction_classification.classification_distance_counts = *cursor++;
+        decoded.scroll_direction_classification.axis_dominance_ratio = *cursor++;
     }
 
     if (!validate_tps43_tuning(decoded)) {
@@ -445,6 +462,33 @@ bool set_configured_tps43_power_mode_timeouts(const tps43_power_mode_timeouts_t&
         return false;
     }
 
+    set_configured_tps43_tuning(candidate);
+    return true;
+}
+
+bool get_configured_tps43_scroll_direction(tps43_scroll_direction_tuning_t* controls) {
+    if (controls == nullptr) {
+        return false;
+    }
+    const ScrollDirectionClassificationTuning& tuning = configured_tps43_tuning().scroll_direction_classification;
+    controls->enabled = tuning.enabled ? 1 : 0;
+    controls->classification_distance_counts = tuning.classification_distance_counts;
+    controls->axis_dominance_ratio = tuning.axis_dominance_ratio;
+    return true;
+}
+
+bool set_configured_tps43_scroll_direction(const tps43_scroll_direction_tuning_t& controls) {
+    if (controls.enabled > 1) {
+        return false;
+    }
+    DualTps43Tuning candidate = configured_tps43_tuning();
+    candidate.scroll_direction_classification.enabled = controls.enabled != 0;
+    candidate.scroll_direction_classification.classification_distance_counts =
+        controls.classification_distance_counts;
+    candidate.scroll_direction_classification.axis_dominance_ratio = controls.axis_dominance_ratio;
+    if (!validate_tps43_tuning(candidate)) {
+        return false;
+    }
     set_configured_tps43_tuning(candidate);
     return true;
 }

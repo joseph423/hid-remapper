@@ -72,6 +72,13 @@ struct ActiveScrollGainTuning {
     uint16_t fast_gain_percent = 50;
 };
 
+// Optional gesture-start classifier for active scroll axis locking.
+struct ScrollDirectionClassificationTuning {
+    bool enabled = true;
+    uint8_t classification_distance_counts = 8;
+    uint8_t axis_dominance_ratio = 2;
+};
+
 // Contains all hardware-independent behavior and motion tuning. Values used by
 // host tests are deterministic fixtures, not approved physical tuning.
 struct DualTps43Tuning {
@@ -89,6 +96,7 @@ struct DualTps43Tuning {
     int32_t cursor_base_scale_q8;
     int32_t scroll_base_scale_q8;
     ActiveScrollGainTuning active_scroll_gain;
+    ScrollDirectionClassificationTuning scroll_direction_classification;
     ScrollMomentumTuning scroll_momentum;
     // Minimum absolute dx or dy in one Right report that qualifies
     // Left-assisted Drag. This threshold is per-report, not accumulated.
@@ -173,6 +181,23 @@ class DualTps43Fsm : public DualPadProcessor {
         Right,
     };
 
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+    enum class ScrollDirectionMode {
+        Unclassified,
+        Vertical,
+        Horizontal,
+        Diagonal,
+    };
+
+    struct ScrollDirectionState {
+        ScrollSource source = ScrollSource::None;
+        ScrollDirectionMode mode = ScrollDirectionMode::Unclassified;
+        int64_t pending_x = 0;
+        int64_t pending_y = 0;
+        uint32_t pending_interval_us = 0;
+    };
+#endif
+
     struct ScrollMotionState {
         MotionScaleState active_scale;
         MotionScaleState gain_scale;
@@ -216,6 +241,12 @@ class DualTps43Fsm : public DualPadProcessor {
     void add_right_cursor(const PadState& right, LogicalActions& actions);
     void add_left_scroll(const PadState& left, LogicalActions& actions);
     void add_right_scroll(const PadState& right, LogicalActions& actions);
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+    bool classify_scroll_delta(
+        ScrollSource source, const PadState& pad, uint32_t sample_interval_us, int32_t& x, int32_t& y);
+    void flush_pending_scroll_direction(const DualPadSnapshot& snapshot, LogicalActions& actions);
+    void reset_scroll_direction(ScrollSource source);
+#endif
     void clear_pending_left_scroll();
     void reset_cursor_temporal_filter();
 
@@ -269,6 +300,9 @@ class DualTps43Fsm : public DualPadProcessor {
     uint32_t scroll_sample_interval_override_us_ = 0;
     ScrollMotionState scroll_motion_;
     ScrollSource scroll_source_this_cycle_ = ScrollSource::None;
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+    ScrollDirectionState scroll_direction_;
+#endif
 };
 
 #endif

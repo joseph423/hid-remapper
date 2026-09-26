@@ -22,6 +22,12 @@ bool has_cursor_input(const PadState& pad) {
     return pad.movement_reported || pad.relative_x != 0 || pad.relative_y != 0;
 }
 
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+uint64_t absolute_int64_value(int64_t value) {
+    return value < 0 ? static_cast<uint64_t>(-(value + 1)) + 1 : static_cast<uint64_t>(value);
+}
+#endif
+
 }  // namespace
 
 DualTps43Fsm::DualTps43Fsm(DualTps43Tuning tuning)
@@ -56,6 +62,9 @@ void DualTps43Fsm::reset() {
     scroll_sample_interval_override_us_ = 0;
     scroll_motion_ = {};
     scroll_source_this_cycle_ = ScrollSource::None;
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+    scroll_direction_ = {};
+#endif
 }
 
 LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
@@ -67,6 +76,14 @@ LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
     if (snapshot.right.touch_started) {
         reset_cursor_temporal_filter();
     }
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+    if (snapshot.left.touch_started) {
+        reset_scroll_direction(ScrollSource::Left);
+    }
+    if (snapshot.right.touch_started) {
+        reset_scroll_direction(ScrollSource::Right);
+    }
+#endif
     if (snapshot.right.touch_started || snapshot.right.touch_ended) {
         pending_cursor_x_ = 0;
         pending_cursor_y_ = 0;
@@ -122,7 +139,18 @@ LogicalActions DualTps43Fsm::process(const DualPadSnapshot& snapshot) {
             break;
     }
 
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+    flush_pending_scroll_direction(snapshot, actions);
+#endif
     apply_motion(snapshot, actions);
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+    if (snapshot.left.touch_ended) {
+        reset_scroll_direction(ScrollSource::Left);
+    }
+    if (snapshot.right.touch_ended) {
+        reset_scroll_direction(ScrollSource::Right);
+    }
+#endif
     if (snapshot.left.touch_ended) {
         clear_pending_left_scroll();
     }
@@ -521,18 +549,139 @@ void DualTps43Fsm::add_left_scroll(const PadState& left, LogicalActions& actions
         std::numeric_limits<uint32_t>::max(),
         static_cast<uint64_t>(pending_left_scroll_interval_us_) + current_interval));
     clear_pending_left_scroll();
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+    const bool classified = classify_scroll_delta(
+        ScrollSource::Left, left, scroll_sample_interval_override_us_, actions.scroll_x, actions.scroll_y);
+    if (!classified) {
+        actions.scroll_x = 0;
+        actions.scroll_y = 0;
+    }
+#endif
     if (left.fresh_sample) {
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+        if (classified) {
+            scroll_source_this_cycle_ = ScrollSource::Left;
+        }
+#else
         scroll_source_this_cycle_ = ScrollSource::Left;
+#endif
     }
 }
 
 void DualTps43Fsm::add_right_scroll(const PadState& right, LogicalActions& actions) {
     actions.scroll_x += right.relative_x;
     actions.scroll_y += right.relative_y;
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+    const bool classified = classify_scroll_delta(
+        ScrollSource::Right, right, right.sample_interval_us, actions.scroll_x, actions.scroll_y);
+    if (!classified) {
+        actions.scroll_x = 0;
+        actions.scroll_y = 0;
+    }
+#endif
     if (right.fresh_sample) {
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+        if (classified) {
+            scroll_source_this_cycle_ = ScrollSource::Right;
+        }
+#else
         scroll_source_this_cycle_ = ScrollSource::Right;
+#endif
     }
 }
+
+#if defined(TPS43_TEST_SCROLL_DIRECTION_CLASSIFICATION)
+bool DualTps43Fsm::classify_scroll_delta(
+    ScrollSource source, const PadState& pad, uint32_t sample_interval_us, int32_t& x, int32_t& y) {
+    if (!tuning_.scroll_direction_classification.enabled) {
+        reset_scroll_direction(source);
+        return true;
+    }
+    if (!pad.fresh_sample) {
+        return true;
+    }
+    if (scroll_direction_.source != source) {
+        scroll_direction_ = {};
+        scroll_direction_.source = source;
+    }
+
+    if (scroll_direction_.mode == ScrollDirectionMode::Unclassified) {
+        if (x == 0 && y == 0) {
+            return false;
+        }
+        scroll_direction_.pending_x += x;
+        scroll_direction_.pending_y += y;
+        scroll_direction_.pending_interval_us = static_cast<uint32_t>(std::min<uint64_t>(
+            std::numeric_limits<uint32_t>::max(),
+            static_cast<uint64_t>(scroll_direction_.pending_interval_us) +
+                (sample_interval_us != 0 ? sample_interval_us : kFallbackMotionSampleIntervalUs)));
+
+        const uint64_t distance = absolute_int64_value(scroll_direction_.pending_x) +
+                                  absolute_int64_value(scroll_direction_.pending_y);
+        if (scroll_direction_.pending_x == 0 && scroll_direction_.pending_y == 0) {
+            scroll_direction_.pending_interval_us = 0;
+        }
+        if (distance < tuning_.scroll_direction_classification.classification_distance_counts) {
+            return false;
+        }
+
+        const uint64_t absolute_x = absolute_int64_value(scroll_direction_.pending_x);
+        const uint64_t absolute_y = absolute_int64_value(scroll_direction_.pending_y);
+        const uint8_t dominance_ratio = tuning_.scroll_direction_classification.axis_dominance_ratio;
+        if (absolute_y >= static_cast<uint64_t>(dominance_ratio) * absolute_x) {
+            scroll_direction_.mode = ScrollDirectionMode::Vertical;
+        } else if (absolute_x >= static_cast<uint64_t>(dominance_ratio) * absolute_y) {
+            scroll_direction_.mode = ScrollDirectionMode::Horizontal;
+        } else {
+            scroll_direction_.mode = ScrollDirectionMode::Diagonal;
+        }
+        x = saturate_int32(scroll_direction_.pending_x);
+        y = saturate_int32(scroll_direction_.pending_y);
+        scroll_sample_interval_override_us_ = scroll_direction_.pending_interval_us;
+        scroll_direction_.pending_x = 0;
+        scroll_direction_.pending_y = 0;
+    }
+
+    switch (scroll_direction_.mode) {
+        case ScrollDirectionMode::Vertical:
+            x = 0;
+            break;
+        case ScrollDirectionMode::Horizontal:
+            y = 0;
+            break;
+        case ScrollDirectionMode::Diagonal:
+            // Keep the initial classification, but preserve each later sample's actual axis ratio.
+            break;
+        case ScrollDirectionMode::Unclassified:
+            return false;
+    }
+    return true;
+}
+
+void DualTps43Fsm::flush_pending_scroll_direction(
+    const DualPadSnapshot& snapshot, LogicalActions& actions) {
+    const bool left_ended = snapshot.left.touch_ended && scroll_direction_.source == ScrollSource::Left;
+    const bool right_ended = snapshot.right.touch_ended && scroll_direction_.source == ScrollSource::Right;
+    if (scroll_direction_.mode != ScrollDirectionMode::Unclassified ||
+        (!left_ended && !right_ended) ||
+        (scroll_direction_.pending_x == 0 && scroll_direction_.pending_y == 0)) {
+        return;
+    }
+
+    // A gesture shorter than the startup threshold must still deliver its
+    // measured displacement; only direction shaping is skipped for that tail.
+    actions.scroll_x = saturate_int32(scroll_direction_.pending_x);
+    actions.scroll_y = saturate_int32(scroll_direction_.pending_y);
+    scroll_sample_interval_override_us_ = scroll_direction_.pending_interval_us;
+    scroll_source_this_cycle_ = scroll_direction_.source;
+}
+
+void DualTps43Fsm::reset_scroll_direction(ScrollSource source) {
+    if (scroll_direction_.source == source || source == ScrollSource::None) {
+        scroll_direction_ = {};
+    }
+}
+#endif
 
 void DualTps43Fsm::clear_pending_left_scroll() {
     pending_left_scroll_x_ = 0;
