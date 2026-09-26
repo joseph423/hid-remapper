@@ -865,7 +865,9 @@ static inline uint8_t dpad(bool left, bool right, bool up, bool down) {
 
 int32_t eval_expr(uint8_t expr, uint64_t now, bool auto_repeat) {
     static int32_t stack[STACK_SIZE];
+#ifndef TPS43_QUIET_PRODUCTION
     bool debug = false;
+#endif
     int16_t ptr = -1;
     if (expr >= NEXPRESSIONS) {
         return 0;
@@ -931,8 +933,10 @@ int32_t eval_expr(uint8_t expr, uint64_t now, bool auto_repeat) {
                 stack[ptr] = cosf((float) stack[ptr] * 3.14159265f / 180000.0f) * 1000;
                 break;
             case Op::DEBUG:
+#ifndef TPS43_QUIET_PRODUCTION
                 debug = true;
                 printf("\nexpr %d\n", expr + 1);
+#endif
                 break;
             case Op::AUTO_REPEAT:
                 stack[++ptr] = auto_repeat ? 1000 : 0;
@@ -1102,9 +1106,11 @@ int32_t eval_expr(uint8_t expr, uint64_t now, bool auto_repeat) {
                 ptr--;
                 break;
             case Op::PRINT_IF:
+#ifndef TPS43_QUIET_PRODUCTION
                 if (stack[ptr] != 0) {
                     printf("%ld\n", stack[ptr - 1]);
                 }
+#endif
                 ptr -= 2;
                 break;
             case Op::TIME_SEC:
@@ -1192,12 +1198,14 @@ int32_t eval_expr(uint8_t expr, uint64_t now, bool auto_repeat) {
                 printf("unknown op!\n");
                 return 0;
         }
+#ifndef TPS43_QUIET_PRODUCTION
         if (debug) {
             for (int i = 0; i <= ptr; i++) {
                 printf("0x%08lx ", stack[i]);
             }
             printf("\n");
         }
+#endif
     }
     if (ptr >= 0) {
         return stack[ptr];
@@ -1516,7 +1524,9 @@ void process_mapping(bool auto_repeat) {
         }
         if (needs_to_be_sent(report_id)) {
             if (or_items == OR_BUFSIZE) {
+#ifndef TPS43_QUIET_PRODUCTION
                 printf("overflow!\n");
+#endif
                 break;
             }
             uint8_t prev = (or_tail + OR_BUFSIZE - 1) % OR_BUFSIZE;
@@ -1563,6 +1573,7 @@ bool send_report(send_report_t do_send_report) {
         sent = do_send_report(0, outgoing_reports[or_head], report_sizes[report_id] + 1);
     }
 
+#ifndef TPS43_QUIET_PRODUCTION
     const uint64_t submission_timestamp_us = get_time();
     // Measure only the parsed mouse report, including failed submission attempts.
     // USB acceptance is not host receipt or on-screen presentation time.
@@ -1582,6 +1593,7 @@ bool send_report(send_report_t do_send_report) {
         tps43_normal_capture_note_scroll_usb(
             submission_timestamp_us, sent, axis(0x00010038), axis(0x000C0238));
     }
+#endif
     // A rejected submission must retain movement and button edges for retry.
     if (!sent && our_descriptor == &our_descriptors[our_descriptor_number])
         return false;
@@ -1997,11 +2009,13 @@ void inject_tps43_output_q8(
     add_relative(kMousePanUsage, 3, scroll_x_q8, true);
     set_button(kMouseButton1Usage, left_button_held);
     set_button(kMouseButton2Usage, right_button_held);
+#ifndef TPS43_QUIET_PRODUCTION
     const uint64_t metrics_timestamp_us = tps43_runtime_metrics_enabled() ? get_time() : 0;
     tps43_note_pointer_service(
         cursor_x_q8 != 0 || cursor_y_q8 != 0,
         scroll_x_q8 != 0 || scroll_y_q8 != 0,
         metrics_timestamp_us);
+#endif
 }
 
 void inject_tps43_digitizer(

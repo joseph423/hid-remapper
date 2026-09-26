@@ -21,7 +21,9 @@ size_t next_output_index(size_t index) {
 }
 
 void flush_output_buffer() {
-    if (!tud_cdc_connected()) {
+    // Most production loops have no serial output; avoid CDC work then, while
+    // still delivering a queued startup error if a monitor connects later.
+    if (output_head == output_tail || !tud_cdc_connected()) {
         return;
     }
 

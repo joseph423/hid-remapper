@@ -46,7 +46,9 @@ void ps4_device_connected(uint16_t interface, uint16_t vid, uint16_t pid) {
         their_feature_usages[interface].count(0xF1) &&
         their_feature_usages[interface].count(0xF2) &&
         their_feature_usages[interface].count(0xF3)) {
+#ifndef TPS43_QUIET_PRODUCTION
         printf("ps auth candidate detected\n");
+#endif
         if (auth_dev == 0) {
             auth_dev = interface;
         }

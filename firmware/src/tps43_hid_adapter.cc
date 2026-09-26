@@ -37,9 +37,11 @@ void Tps43RemapperActionSink::apply(const LogicalActions& actions) {
     inject_tps43_digitizer(
         actions.right_touch_active, actions.right_touch_finger_count, digitizer_x_, digitizer_y_,
         static_cast<uint16_t>((get_time() / 100) & 0xFFFF));
+#ifndef TPS43_QUIET_PRODUCTION
     if (tps43_normal_capture_busy()) {
         tps43_normal_capture_note_scroll_action(get_time(), scroll_x_q8, scroll_y_q8);
     }
+#endif
 }
 
 void Tps43RemapperActionSink::reset() {

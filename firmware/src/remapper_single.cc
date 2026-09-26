@@ -46,6 +46,7 @@ void read_report(bool* new_report, bool* tick) {
     *tick = get_and_clear_tick_pending();
 
     reports_received = false;
+#ifndef TPS43_QUIET_PRODUCTION
     if (tps43_runtime_metrics_enabled()) {
         const uint64_t host_service_started_us = time_us_64();
         tuh_task();
@@ -55,6 +56,9 @@ void read_report(bool* new_report, bool* tick) {
     } else {
         tuh_task();
     }
+#else
+    tuh_task();
+#endif
     *new_report = reports_received;
 }
 
@@ -71,7 +75,9 @@ void descriptor_received_callback(uint16_t vendor_id, uint16_t product_id, const
 }
 
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_report, uint16_t desc_len) {
+#ifndef TPS43_QUIET_PRODUCTION
     printf("tuh_hid_mount_cb\n");
+#endif
 
     uint8_t hub_addr;
     uint8_t hub_port;
@@ -95,7 +101,9 @@ void umount_callback(uint8_t dev_addr, uint8_t instance) {
 }
 
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
+#ifndef TPS43_QUIET_PRODUCTION
     printf("tuh_hid_umount_cb\n");
+#endif
     umount_callback(dev_addr, instance);
 }
 

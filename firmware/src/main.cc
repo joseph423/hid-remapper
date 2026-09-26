@@ -58,7 +58,9 @@ DualTps43Coordinator tps43_coordinator(
     right_tps43_driver,
     tps43_processor,
     tps43_action_sink);
+#ifdef TPS43_DIAGNOSTICS
 Tps43TimingCapture tps43_timing_capture;
+#endif
 
 void apply_configured_tps43_tuning() {
     // Apply only at the main-loop boundary. Releasing the adapter first keeps
@@ -80,6 +82,7 @@ void apply_configured_tps43_power_mode_timeouts() {
     }
 }
 
+#ifdef TPS43_DIAGNOSTICS
 struct Tps43PadRuntimeStats {
     uint32_t published_samples = 0;
     uint32_t movement_samples = 0;
@@ -88,6 +91,7 @@ struct Tps43PadRuntimeStats {
 Tps43PadRuntimeStats left_tps43_stats;
 Tps43PadRuntimeStats right_tps43_stats;
 uint64_t next_print = 0;
+#endif
 
 mutex_t mutexes[(uint8_t) MutexId::N];
 
@@ -102,6 +106,7 @@ bool set_gpio_dir_pending = false;
 uint16_t prev_adc_state[NADCS] = { 0 };
 #endif
 
+#ifdef TPS43_DIAGNOSTICS
 void print_stats_maybe() {
     uint64_t now = time_us_64();
     if (now > next_print) {
@@ -118,6 +123,7 @@ void print_stats_maybe() {
         }
     }
 }
+#endif
 
 void __no_inline_not_in_flash_func(sof_handler)(uint32_t frame_count) {
     sof_callback();
@@ -333,11 +339,15 @@ int main() {
         }
     }
 
+#ifdef TPS43_DIAGNOSTICS
     tps43_timing_capture.begin();
+#endif
 
     tud_sof_isr_set(sof_handler);
 
+#ifdef TPS43_DIAGNOSTICS
     next_print = time_us_64() + 1000000;
+#endif
 
     while (true) {
         right_tps43_driver.poll();
@@ -361,10 +371,13 @@ int main() {
             read_adc();
 #endif
             const uint64_t tick_now_us = time_us_64();
+#ifdef TPS43_DIAGNOSTICS
             if (tps43_timing_capture.read_requested()) {
                 right_tps43_driver.request_forced_read(tps43_timing_capture.diagnostic_contact_requested());
             }
+#endif
             tps43_coordinator.service(tick_now_us);
+#ifdef TPS43_DIAGNOSTICS
             const Tps43Sample left_sample = left_tps43_driver.sample();
             const Tps43ServiceTiming& left_timing = left_tps43_driver.timing();
             const Tps43Sample right_sample = right_tps43_driver.sample();
@@ -380,12 +393,14 @@ int main() {
             tps43_timing_capture.record_dual_input(tick_now_us, left_sample, left_timing, right_sample, right_timing);
             tps43_normal_capture_note_sample(tick_now_us, right_sample, right_timing.last_sample_published, right_timing.transfer_failures, right_timing.transfer_timeouts, right_timing.max_poll_us, right_timing.last_acquisition_us);
             tps43_timing_capture.record(tick_now_us, right_sample, right_timing, tps43_timing_capture.wants_diagnostic_contact(right_sample, right_timing) ? &right_sample : nullptr);
+#endif
             process_mapping(true);
             write_gpio();
 #ifdef MCP4651_ENABLED
             mcp4651_write();
 #endif
         }
+#ifdef TPS43_DIAGNOSTICS
         if (tps43_runtime_metrics_enabled()) {
             const uint64_t device_service_started_us = time_us_64();
             tud_task();
@@ -395,8 +410,13 @@ int main() {
         } else {
             tud_task();
         }
+#else
+        tud_task();
+#endif
         tps43_cdc_stdio_flush();
+#ifdef TPS43_DIAGNOSTICS
         tps43_timing_capture.poll_serial();
+#endif
 #ifdef TPS43_ENABLE_SERIAL_RATE_OVERRIDE
         uint16_t requested_report_interval_ms = 0;
         if (tps43_timing_capture.take_active_report_interval_request(requested_report_interval_ms) &&
@@ -445,7 +465,9 @@ int main() {
             need_to_persist_config = false;
         }
 
+#ifdef TPS43_DIAGNOSTICS
         print_stats_maybe();
+#endif
 
         activity_led_off_maybe();
     }

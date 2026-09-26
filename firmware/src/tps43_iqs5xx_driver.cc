@@ -173,11 +173,13 @@ void Tps43Iqs5xxDriver::poll() {
             const bool wake_nack = (config_.bus->hw->tx_abrt_source &
                                     I2C_IC_TX_ABRT_SOURCE_ABRT_7B_ADDR_NOACK_BITS) != 0;
             if (stage_ == Stage::Compact && forced_active_ && !wake_retried_ && wake_nack) {
+#ifndef TPS43_QUIET_PRODUCTION
                 if (low_power_timeout_configuration_pending_) {
                     printf("TPS43 pad=%s power_timeout_retry_scheduled_after_nack=150us tx_abrt=0x%08lx\n",
                         config_.bus == i2c0 ? "right" : "left",
                         static_cast<unsigned long>(config_.bus->hw->tx_abrt_source));
                 }
+#endif
                 (void) static_cast<uint32_t>(config_.bus->hw->clr_tx_abrt);
                 (void) static_cast<uint32_t>(config_.bus->hw->clr_stop_det);
                 wake_retried_ = true;
@@ -201,6 +203,7 @@ void Tps43Iqs5xxDriver::poll() {
                 break;
             case Stage::PowerTimeoutReadClose:
                 // The end-window write does not touch the existing RX buffer.
+#ifndef TPS43_QUIET_PRODUCTION
                 printf(
                     "TPS43 pad=%s idle_timeout_register=0x%04x requested_s=%u readback_s=%u "
                     "lp1_timeout_register=0x%04x requested_20s_units=%u readback_20s_units=%u "
@@ -210,6 +213,7 @@ void Tps43Iqs5xxDriver::poll() {
                     lp1_timeout_requested_20s_units_, data_[1],
                     data_[0] == idle_timeout_requested_seconds_ && data_[1] == lp1_timeout_requested_20s_units_
                         ? "verified" : "mismatch");
+#endif
                 low_power_timeout_configuration_pending_ = false;
                 forced_active_ = false;
                 stage_ = Stage::Idle;
@@ -252,9 +256,11 @@ void Tps43Iqs5xxDriver::poll() {
                 break;
             case Stage::RateClose:
                 timing_.active_report_interval_ms = active_rate_in_progress_ms_;
+#ifndef TPS43_QUIET_PRODUCTION
                 printf("TPS43 pad=%s active_report_interval_ms=%u result=applied persistence=volatile\n",
                     config_.bus == i2c0 ? "right" : "left",
                     active_rate_in_progress_ms_);
+#endif
                 stage_ = Stage::Idle;
                 break;
             case Stage::RecoverClose:
@@ -379,6 +385,7 @@ void Tps43Iqs5xxDriver::fail_acquisition(bool timeout) {
     timing_.transfer_timeouts += timeout;
     const Stage failed_stage = stage_;
     if (low_power_timeout_configuration_pending_) {
+#ifndef TPS43_QUIET_PRODUCTION
         const char* phase = failed_stage == Stage::Compact || failed_stage == Stage::Wake ? "wake_read" :
             (failed_stage == Stage::IdleTimeoutWrite ? "write_idle_timeout" :
             (failed_stage == Stage::Lp1TimeoutWrite ? "write_lp1_timeout" :
@@ -393,14 +400,17 @@ void Tps43Iqs5xxDriver::fail_acquisition(bool timeout) {
             static_cast<unsigned long>(config_.bus->hw->tx_abrt_source),
             static_cast<unsigned long>(config_.bus->hw->raw_intr_stat), gpio_get(config_.rdy_pin),
             wake_retried_);
+#endif
         low_power_timeout_configuration_pending_ = false;
         forced_active_ = false;
     }
     if (failed_stage == Stage::RateWrite || failed_stage == Stage::RateClose) {
+#ifndef TPS43_QUIET_PRODUCTION
         printf("TPS43 pad=%s active_report_interval_ms=%u result=%s failure=%s\n",
             config_.bus == i2c0 ? "right" : "left", active_rate_in_progress_ms_,
             failed_stage == Stage::RateClose ? "unknown" : "failed",
             timeout ? "timeout" : "transfer");
+#endif
     }
     // Discard the partial report, retain the last published state, and perform
     // at most one bounded cleanup write after peripheral recovery.

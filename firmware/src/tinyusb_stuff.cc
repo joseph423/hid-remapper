@@ -231,25 +231,42 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 }
 
 void tud_hid_set_protocol_cb(uint8_t instance, uint8_t protocol) {
+#ifndef TPS43_QUIET_PRODUCTION
     printf("tud_hid_set_protocol_cb %d %d\n", instance, protocol);
+#else
+    (void) instance;
+#endif
     boot_protocol_keyboard = (protocol == HID_PROTOCOL_BOOT);
     boot_protocol_updated = true;
 }
 
 // Records endpoint completion separately from TinyUSB's report-queue acceptance.
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report, uint16_t len) {
+#ifndef TPS43_QUIET_PRODUCTION
     if (our_descriptor_number == 6 && instance == 0 && report != nullptr && len > 0 &&
         report[0] == REPORT_ID_TPS43_DIGITIZER) {
         tps43_normal_capture_note_digitizer_transfer(get_time(), true, report, len);
     }
+#else
+    (void) instance;
+    (void) report;
+    (void) len;
+#endif
 }
 
 void tud_hid_report_failed_cb(
     uint8_t instance, hid_report_type_t report_type, uint8_t const* report, uint16_t xferred_bytes) {
+#ifndef TPS43_QUIET_PRODUCTION
     if (our_descriptor_number == 6 && instance == 0 && report_type == HID_REPORT_TYPE_INPUT && report != nullptr &&
         report[0] == REPORT_ID_TPS43_DIGITIZER) {
         tps43_normal_capture_note_digitizer_transfer(get_time(), false, report, xferred_bytes);
     }
+#else
+    (void) instance;
+    (void) report_type;
+    (void) report;
+    (void) xferred_bytes;
+#endif
 }
 
 void tud_mount_cb() {
@@ -261,9 +278,13 @@ void tud_mount_cb() {
 }
 
 void tud_suspend_cb(bool remote_wakeup_en) {
+#ifndef TPS43_QUIET_PRODUCTION
     printf("tud_suspend_cb\n");
+#endif
 }
 
 void tud_resume_cb() {
+#ifndef TPS43_QUIET_PRODUCTION
     printf("tud_resume_cb\n");
+#endif
 }

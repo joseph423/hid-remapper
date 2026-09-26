@@ -61,8 +61,18 @@ add_executable(remapper
 set(TPS43_NORMAL_CAPTURE_TRACE_CAPACITY "1" CACHE STRING "Retained normal-capture rows per source")
 target_compile_definitions(remapper PRIVATE TPS43_NORMAL_CAPTURE_TRACE_CAPACITY=${TPS43_NORMAL_CAPTURE_TRACE_CAPACITY})
 
+option(TPS43_DIAGNOSTICS "Enable TPS43 serial diagnostics and timing captures in the main UF2" OFF)
+if(TPS43_DIAGNOSTICS)
+target_compile_definitions(remapper PRIVATE TPS43_DIAGNOSTICS=1)
+else()
+target_compile_definitions(remapper PRIVATE TPS43_QUIET_PRODUCTION=1)
+endif()
+
 option(TPS43_ENABLE_SERIAL_RATE_OVERRIDE "Enable diagnostic-only `rate right 8|13` serial commands" OFF)
 if(TPS43_ENABLE_SERIAL_RATE_OVERRIDE)
+if(NOT TPS43_DIAGNOSTICS)
+    message(FATAL_ERROR "TPS43_ENABLE_SERIAL_RATE_OVERRIDE requires TPS43_DIAGNOSTICS")
+endif()
 target_compile_definitions(remapper PRIVATE TPS43_ENABLE_SERIAL_RATE_OVERRIDE=1)
 endif()
 
@@ -76,6 +86,9 @@ endif()
 
 option(TPS43_PRINT_STATS "Print generic Remapper performance statistics on the CDC serial stream" OFF)
 if(TPS43_PRINT_STATS)
+if(NOT TPS43_DIAGNOSTICS)
+    message(FATAL_ERROR "TPS43_PRINT_STATS requires TPS43_DIAGNOSTICS")
+endif()
 target_compile_definitions(remapper PRIVATE TPS43_PRINT_STATS=1)
 endif()
 
